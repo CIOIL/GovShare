@@ -1,0 +1,145 @@
+<?php
+
+/**
+ * @file
+ * Install functions for the govil_og_notify module.
+ */
+
+ /**
+ * Implements hook_install().
+ */
+function govil_og_notify_install() {
+  drupal_install_schema('govil_og_notify');
+
+  variable_set('govil_og_notify_day', strtotime('today midnight'));
+  variable_set('govil_og_notify_week', strtotime('today midnight'));
+  variable_set('govil_og_notify_month', strtotime('today midnight'));
+}
+
+/**
+ * Implements hook_schema().
+ */
+function govil_og_notify_schema() {
+  $schema['govil_og_notify'] = array(
+    'description' => 'Settings table: The table saves who doesnt want to get emails about updates in his group.',
+    'fields' => array(
+      'gid' => array(
+        'description' => 'Group ID. 0 for all',
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+      ),
+      'uid' => array(
+        'description' => 'User ID. 0 for all',
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+      ),
+      'content_type' => array(
+        'description' => 'Machine name of content type. 0 for all',
+        'type' => 'varchar',
+        'length' => 255,
+        'not null' => TRUE,
+        'default' => '-1',
+      ),
+      'updates' => array(
+        'description' => 'Indicate the type of the updating. Can be 0/1/2.',
+        'type' => 'int',
+        'not null' => TRUE,
+        'size' => 'tiny',
+        'default' => 0,
+      ),
+      'state' => array(
+        'description' => 'Boolean indicating whether the email will be sent.',
+        'type' => 'int',
+        'not null' => TRUE,
+        'size' => 'tiny',
+        'default' => 0,
+      ),
+      'frequency' => array(
+        'description' => 'Indicate frequency. Can be 0/1/2/3 for daily, weekly etc.',
+        'type' => 'int',
+        'not null' => TRUE,
+        'size' => 'tiny',
+        'default' => 0,
+      ),
+    ),
+  );
+
+  $schema['govil_og_notify_queue'] = array(
+    'description' => 'The table saves data to send as notifications.',
+    'fields' => array(
+      'id' => array(
+        'description' => 'The primary identifier.',
+        'type' => 'serial',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+      ),
+      'gid' => array(
+        'description' => 'Group ID.',
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+      ),
+      'nid' => array(
+        'description' => 'Updated Node ID.',
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+      ),
+      'content_type' => array(
+        'description' => 'Machine name of content type of nid.',
+        'type' => 'varchar',
+        'length' => 255,
+        'not null' => TRUE,
+        'default' => '0',
+      ),
+      'updates' => array(
+        'description' => 'Indicate the type of the updating. Can be 1 for new or 2.',
+        'type' => 'int',
+        'not null' => TRUE,
+        'size' => 'tiny',
+      ),
+      'online' => array(
+        'description' => 'Boolean indicating whether the online email is sent.',
+        'type' => 'int',
+        'not null' => TRUE,
+        'size' => 'tiny',
+        'default' => 0,
+      ),
+      'day' => array(
+        'description' => 'Boolean indicating whether the daily email is sent.',
+        'type' => 'int',
+        'not null' => TRUE,
+        'size' => 'tiny',
+        'default' => 0,
+      ),
+      'week' => array(
+        'description' => 'Boolean indicating whether the weekly email is sent.',
+        'type' => 'int',
+        'not null' => TRUE,
+        'size' => 'tiny',
+        'default' => 0,
+      ),
+      'month' => array(
+        'description' => 'Boolean indicating whether the monthly email is sent.',
+        'type' => 'int',
+        'not null' => TRUE,
+        'size' => 'tiny',
+        'default' => 0,
+      ),
+    ),
+    'primary key' => array('id'),
+  );
+
+  return $schema;
+}
+
+/**
+ * Implements hook_uninstall().
+ */
+function govil_og_notify_uninstall() {
+  variable_del('govil_og_notify_day');
+  variable_del('govil_og_notify_week');
+  variable_del('govil_og_notify_month');
+}

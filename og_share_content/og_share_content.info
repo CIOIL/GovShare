@@ -1,0 +1,7 @@
+name = "Og share content"
+description = "Share content between og groups."
+core = 7.x
+configure = admin/config/og_share_content
+
+dependencies[] = ctools
+dependencies[] = og

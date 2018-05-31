@@ -1,0 +1,7 @@
+name = "Event Invitation"
+description = "send invitation to all site members/ og group members from event content type"
+core = 7.x
+
+files[] = event_invitation.mail.inc
+dependencies[] = date
+dependencies[] = addressfield

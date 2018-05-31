@@ -1,0 +1,9 @@
+name = Gov IL OG Notifications
+description = "Send emails to group's users when content in group is created or updated
+ and let the users to manage their e-mails."
+core = 7.x
+dependencies[] = og
+
+configure = admin/config/govil_og_notify
+
+version = "7.x-1.0"

@@ -1,0 +1,687 @@
+<?php
+
+/**
+ * @file
+ * Module file.
+ */
+
+ /**
+  * Implements hook_help().
+  *
+  * @param string $path
+  * @param $arg
+  *
+  * @return
+  *   Help msg
+  */
+function og_share_content_help($path, $arg) {
+  switch ($path) {
+    case 'admin/config/og_share_content':
+      $output = '<p>' . t('Og share content module gives the user the ability to share content between Organic Groups.') . '</p>';
+      return $output;
+  }
+}
+
+/**
+ * Implements hook_menu().
+ *
+ * @return
+ *   Array menu items
+ */
+function og_share_content_menu() {
+  $items = array();
+
+  // Main configuration page of the Og share content module.
+  $items['admin/config/og_share_content'] = array(
+    'title' => 'Og share content settings',
+    'description' => 'Define content type to share content',
+    'file' => 'og_share_content.admin.inc',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('og_share_content_admin_settings'),
+    'access arguments' => array('administer Og share content settings'),
+    'type' => MENU_NORMAL_ITEM,
+  );
+
+  $items['node/%/share'] = array(
+    'title' => 'Share',
+    'type' => MENU_CALLBACK,
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('og_share_content_form', 1),
+    'access callback' => 'og_share_content_access',
+    'access arguments' => array(1),
+  );
+
+  $items['og_share_content/%node/%ctools_js'] = array(
+    'page callback' => 'og_share_content_callback',
+    'page arguments' => array(1, 2),
+     // Access TRUE because just after click on the link that was checked
+     // before you arrive to this menu item.
+    'access callback' => TRUE,
+    'type' => MENU_CALLBACK,
+  );
+
+  return $items;
+}
+
+/**
+ * Implements hook_permission().
+ *
+ * @return
+ *   Permissions
+ */
+function og_share_content_permission() {
+  $perms = array();
+  $perms['administer Og share content settings'] = array(
+    'title' => t('Administer Og share content settings'),
+    'description' => t('Define content type and other settings to share content.'),
+  );
+  return $perms;
+}
+
+/**
+ * Access function - check if user can share the node.
+ *
+ * @param $nid
+ *   The node ID.
+ * @param $gid
+ *   The group ID or the group entity.
+ *
+ * @return
+ *   TRUE if user can share the node, False if not.
+ */
+function og_share_content_access($nid, $gid = NULL) {
+  if (!isset($gid)) {
+    $node = node_load($nid);
+    $gid = og_share_content_get_ref_by_node($node)['gid'];
+    if ($gid == NULL) {
+      return FALSE;
+    }
+  }
+  // Make sure that gid is id of an organic group.
+  if (!og_is_group('node', $gid)) {
+    return FALSE;
+  }
+  // Make sure that the user is member in the group.
+  global $user;
+  if (!og_is_member('node', $gid, 'user', $user)) {
+    return FALSE;
+  }
+
+  if (module_exists('og_access')) {
+    // Make sure that group is public.
+    $field_info = field_info_field('group_access');
+    $query = 'SELECT * FROM {node} WHERE nid IN (:nids)';
+    $group = db_query($query, array(':nids' => array($gid)))->fetchAllAssoc('nid');
+    field_attach_load('node', $group, FIELD_LOAD_CURRENT, array('field_id' => $field_info['id']));
+    if (isset($group[$gid]->group_access) && $group[$gid]->group_access[LANGUAGE_NONE][0]['value'] == 1) {
+      return FALSE;
+    }
+  }
+
+  return TRUE;
+}
+
+/**
+ * Return the og ref of an entity.
+ *
+ * @param $node
+ *   The node entity
+ *
+ * @return
+ *   Array og ref - name and gid or NULL
+ */
+function og_share_content_get_ref_by_node($node) {
+  $og_fields = og_get_group_audience_fields('node', $node->type);
+  if (count($og_fields) > 0) {
+    $og_fields = array_keys($og_fields);
+    $og_ref = array_pop($og_fields);
+    if (isset($node->{$og_ref}[LANGUAGE_NONE][0]['target_id'])) {
+      return array(
+        'ref_name' => $og_ref,
+        'gid' => $node->{$og_ref}[LANGUAGE_NONE][0]['target_id'] ,
+      );
+    }
+  }
+  return NULL;
+}
+
+/**
+ * Return the og ref name of the entity.
+ *
+ * @param string $type
+ *   The node type.
+ *
+ * @return
+ *   string og ref name, or NULL
+ */
+function og_share_content_get_ref_by_type($type) {
+  $og_fields = og_get_group_audience_fields('node', $type);
+  if (count($og_fields) > 0) {
+    $og_fields = array_keys($og_fields);
+    $og_ref = array_pop($og_fields);
+    if (isset($og_ref) && !empty($og_ref)) {
+      return $og_ref;
+    }
+  }
+  return NULL;
+}
+
+/**
+ * Implements hook_node_view().
+ *
+ * @param $node
+ * @param $view_mode
+ * @param $langcode
+ */
+function og_share_content_node_view($node, $view_mode, $langcode) {
+  // Display link to 'share' modal.
+  if ($view_mode == 'full' && in_array($node->type, og_share_content_types())) {
+    $gid = og_share_content_get_ref_by_node($node)['gid'];
+    if (og_share_content_access($node->nid, $gid) && user_is_logged_in()) {
+      // If there is no group to share with - don't show link.
+      $groups = og_share_content_get_groups($gid);
+      unset($groups[$gid]);
+      if ($groups != -1 && !empty($groups)) {
+        ctools_include('modal');
+        ctools_modal_add_js();
+        drupal_add_js(array(
+          'CToolsModal' => array(
+            'modalSize' => array(
+              'type' => 'fixed',
+              'width' => 500,
+              'height' => 150,
+            ),
+          ),
+        ), 'setting');
+        $node->content['links']['node']['#links']['og_share_content'] = array(
+          'title' => t('share content'),
+          'href' => 'og_share_content/' . $node->nid . '/nojs',
+          'attributes' => array('class' => 'ctools-use-modal'),
+        );
+      }
+    }
+  }
+}
+
+/**
+ * Implements hook_form().
+ *
+ * @param $form
+ * @param $form_state
+ * @param $node
+ *
+ * @return
+ *   object $form
+ */
+function og_share_content_form($form, &$form_state, $node = NULL) {
+  $node = (!isset($node) && !empty($form_state['nid'])) ? $form_state['nid'] : node_load($node);
+  $gid = og_share_content_get_ref_by_node($node)['gid'];
+  $groups = og_share_content_get_groups($gid);
+  if ($groups == -1 || empty($groups)) {
+    $form_state['ajax_commands'][] = ctools_modal_command_dismiss();
+    drupal_set_message(t("Sorry. You don't have the option to select groups"), 'error');
+    $form_state['ajax_commands'][] = ajax_command_remove('div.messages.status');
+    $form_state['ajax_commands'][] = ajax_command_after('div.tabs', theme('status_messages'));
+  }
+  else {
+    unset($groups[$gid]);
+    $group_type = variable_get('og_share_content_group_type', '');
+    $form[$group_type] = array(
+      '#type' => 'select',
+      '#title' => check_plain(t($group_type)),
+      '#options' => $groups,
+      '#description' => check_plain(t('Choose the') . ' ' . t($group_type) . ' ' . t('you want to share this page.')),
+    );
+
+    $form['submit'] = array(
+      '#type' => 'submit',
+      '#value' => t('Save'),
+    );
+  }
+
+  return $form;
+}
+
+/**
+ * Submit function.
+ *
+ * Sharing the content and print status message.
+ *
+ * @param $form
+ * @param $form_state
+ */
+function og_share_content_form_submit($form, &$form_state) {
+  $og_ref = og_share_content_get_ref_by_node($form_state['nid'])['ref_name'];
+  $group_type = variable_get('og_share_content_group_type', '');
+  $form_state['nid']->{$og_ref}[LANGUAGE_NONE][] = array('target_id' => $form_state['values'][$group_type]);
+  node_save($form_state['nid']);
+  // Tell the browser to close the modal.
+  $form_state['ajax_commands'][] = ctools_modal_command_dismiss();
+  drupal_set_message(t('The content has been shared successfully.'));
+  $form_state['ajax_commands'][] = ajax_command_remove('div.messages.status');
+  $form_state['ajax_commands'][] = ajax_command_after('div.tabs', theme('status_messages'));
+}
+
+/**
+ * Ajax menu callback.
+ *
+ * @param $node
+ * @param $ajax
+ *
+ * @return
+ *   nothing or og_share_content_form
+ */
+function og_share_content_callback($node, $ajax) {
+  if ($ajax) {
+    ctools_include('ajax');
+    ctools_include('modal');
+
+    $form_state = array(
+      'ajax' => TRUE,
+      'title' => t('Share this page with another group'),
+      'nid' => $node,
+    );
+
+    // Use ctools to generate ajax instructions for the browser to create
+    // a form in a modal popup.
+    $output = ctools_modal_form_wrapper('og_share_content_form', $form_state);
+
+    // If the form has been submitted, there may be additional instructions
+    // such as dismissing the modal popup.
+    if (!empty($form_state['ajax_commands'])) {
+      $output = $form_state['ajax_commands'];
+    }
+
+    // Return the ajax instructions to the browser via ajax_render().
+    print ajax_render($output);
+    drupal_exit();
+  }
+  else {
+    return drupal_get_form('og_share_content_form', $node->nid);
+  }
+}
+
+/**
+ * Returns array of content types in group.
+ *
+ * @return
+ *   Array of content types machine names.
+ */
+function og_share_content_types() {
+  $content_types = variable_get('og_share_content_types', NULL);
+  $del_types = array_keys($content_types, '0');
+
+  foreach ($del_types as $value) {
+    unset($content_types[$value]);
+  }
+  return $content_types;
+}
+
+/**
+ * Returns array of groups the user can share with them.
+ *
+ * @param $gid
+ *   The group ID.
+ *
+ * @return
+ *   Array of groups for select-list on form.
+ */
+function og_share_content_get_groups($gid) {
+  $group = node_load($gid);
+  $group_type = variable_get('og_share_content_group_type', '');
+
+  $access = TRUE;
+  if (module_exists('og_access')) {
+    // Make sure that group is public.
+    if (isset($group->group_access) && $group->group_access[LANGUAGE_NONE][0]['value'] == 1) {
+      $access = FALSE;
+    }
+  }
+
+  if ($group->type == $group_type && $access) {
+    global $user;
+    $account = $user;
+
+    // Select groups the user belongs to.
+    $query = db_select('og_membership', 'og');
+    $query->join('node', 'n', 'og.gid = n.nid');
+    $query->condition('og.entity_type', 'user', 'LIKE')
+      ->condition('og.etid', $account->uid, '=')
+      ->condition('og.state', 1, '=')
+      ->condition('n.type', $group_type, '=');
+
+    // If in the site there is a parent group,
+    // users can only share content in groups under the parent group.
+    $parent_group = variable_get('og_share_content_parent', 0);
+    if ($parent_group) {
+      // Get parent group id.
+      $parent_group_ref = og_share_content_get_ref_by_node($group);
+
+      // Select groups that belongs to the parent group.
+      $subquery = db_select('og_membership', 'o');
+      // Make sure that group is public.
+      if (module_exists('og_access') && isset($group->group_access)) {
+        $subquery->join('field_data_group_access', 'acs', 'acs.entity_id = o.etid');
+        $subquery->condition('acs.group_access_value', 0, '=');
+      }
+      $subquery->condition('o.entity_type', 'node', 'LIKE')
+        ->condition('o.gid', $parent_group_ref['gid'], '=')
+        ->condition('o.field_name', $parent_group_ref['ref_name'], 'LIKE')
+        ->fields('o', array('etid'));
+
+      // Add subquery to main query.
+      $query->condition('og.gid', $subquery, 'IN');
+    }
+
+    $query->fields('n', array('nid', 'title'));
+    $array = $query->execute()->fetchAllKeyed();
+  }
+  else {
+    $array = -1;
+  }
+  return $array;
+}
+
+/**
+ * Implements hook_ctools_plugin_pre_alter().
+ *
+ * @param $plugin
+ * @param $info
+ */
+function og_share_content_ctools_plugin_pre_alter(&$plugin, $info) {
+  // Modifies the core ctools implementation to show
+  // the correct headers and sidebars.
+  if ($plugin['name'] == 'entity_from_field') {
+    $plugin['context'] = 'og_share_content_context';
+  }
+  elseif ($plugin['name'] == 'og_menu_pane_content_type') {
+    $plugin['render callback'] = 'og_share_content_pane_content_type_render';
+  }
+}
+
+/**
+ * Context for hook_ctools_plugin_pre_alter.
+ *
+ * Instead of ctools_entity_from_field_context
+ * from ctools/.../entity_from_field.inc.
+ *
+ * @param $context
+ * @param $conf
+ *
+ * @return
+ *   ctools context
+ */
+function og_share_content_context($context, $conf) {
+  // Perform access check on current logged in user.
+  global $user;
+  // Clone user object so account can be passed by value to access callback.
+  $account = clone $user;
+
+  $delta = !empty($conf['delta']) ? intval($conf['delta']) : 0;
+  $plugin = $conf['name'];
+  list($plugin, $plugin_name) = explode(':', $plugin);
+  list($field_name, $from_entity, $to_entity) = explode('-', $plugin_name);
+  // If unset it wants a generic, unfilled context, which is just NULL.
+  $entity_info = entity_get_info($from_entity);
+  if (empty($context->data) || !isset($context->data->{$entity_info['entity keys']['id']})) {
+    return ctools_context_create_empty('entity:' . $to_entity, NULL);
+  }
+
+  if (isset($context->data->{$entity_info['entity keys']['id']})) {
+    // Load the entity.
+    $id = $context->data->{$entity_info['entity keys']['id']};
+    $entity = entity_load($from_entity, array($id));
+    $entity = $entity[$id];
+    if ($items = field_get_items($from_entity, $entity, $field_name)) {
+      if (isset($items[$delta])) {
+        ctools_include('fields');
+        $to_entity_info = entity_get_info($to_entity);
+
+        $plugin_info = ctools_get_relationship($conf['name']);
+        $og_ref = og_share_content_get_ref_by_node($context->data)['ref_name'];
+        if ($conf['name'] == 'entity_from_field:' . $og_ref . '-node-node' && count($items) > 1) {
+          $to_entity_id = og_share_content_get_ref_group($_SERVER['HTTP_REFERER'], $items);
+        }
+        else {
+          $to_entity_id = $items[$delta][$plugin_info['source key']];
+        }
+        $loaded_to_entity = entity_load($to_entity, array($to_entity_id));
+        $loaded_to_entity = array_shift($loaded_to_entity);
+
+        // Pass current user account and entity type to access callback.
+        if (isset($to_entity_info['access callback']) && function_exists($to_entity_info['access callback']) && !call_user_func($to_entity_info['access callback'], 'view', $loaded_to_entity, $account, $to_entity)) {
+          return ctools_context_create_empty('entity:' . $to_entity, NULL);
+        }
+        else {
+          // Send it to ctools.
+          return ctools_context_create('entity:' . $to_entity, $to_entity_id);
+        }
+      }
+      else {
+        // In case that delta was empty.
+        return ctools_context_create_empty('entity:' . $to_entity, NULL);
+      }
+    }
+  }
+}
+
+/**
+ * Og Menu render for hook_ctools_plugin_pre_alter.
+ *
+ * Instead of og_menu_pane_content_type_render from
+ * og_menu/.../og_menu_pane_content_type.inc.
+ *
+ * @param $subtype
+ * @param $conf
+ * @param $args
+ * @param $context
+ *
+ * @return
+ *   pane msg or FALSE
+ */
+function og_share_content_pane_content_type_render($subtype, $conf, $args, $context) {
+
+  // Grabs the gid from the node's group ref field (for group content nodes)
+  if (isset($context->data->{OG_AUDIENCE_FIELD}[LANGUAGE_NONE][0])) {
+    if (count($context->data->{OG_AUDIENCE_FIELD}[LANGUAGE_NONE]) > 1 && isset($_SERVER['HTTP_REFERER'])) {
+      $gid = og_share_content_get_ref_group($_SERVER['HTTP_REFERER'], $context->data->{OG_AUDIENCE_FIELD}[LANGUAGE_NONE]);
+    }
+    else {
+      $gid = $context->data->{OG_AUDIENCE_FIELD}[LANGUAGE_NONE][0]['target_id'];
+    }
+  }
+
+  // This should be TRUE for group nodes.
+  elseif (isset($context->data->{OG_GROUP_FIELD})) {
+    $gid = $context->data->nid;
+  }
+
+  // If we are using something like a view, and passing in the gid
+  // through the URL, then the argument should hold the gid. This also
+  // should be TRUE for the group node if no context was selected.
+  elseif (!empty($args)) {
+    if (og_is_group('node', $args[0])) {
+      $gid = intval($args[0]);
+    }
+    else {
+      return FALSE;
+    }
+  }
+  else {
+    return FALSE;
+  }
+
+  // Get the OG menu for the group.
+  $groups = array('node' => array($gid));
+  $menus = og_menu_get_group_menus($groups);
+  $conf['menu_index'] = isset($conf['menu_index']) ? $conf['menu_index'] : 0;
+  $menu = $menus[$conf['menu_index']];
+
+  if ($menu) {
+    $pane = new stdClass();
+    $pane->title = check_plain($menu['title']);
+    // Link the pane title to the group if this has been set in configuration.
+    if (isset($conf['og_menu_pane_block_links']) && $conf['og_menu_pane_block_links']) {
+      $pane->title_link = 'node/' . $gid;
+    }
+    if (module_exists('menu_block')) {
+      // Build up an array for menu in levels.
+      $conf['menu_name'] = $menu['menu_name'];
+      $conf['delta'] = 1;
+      $conf['sort'] = FALSE;
+      $conf['title_link'] = FALSE;
+      $conf['follow'] = FALSE;
+      $conf['expanded'] = isset($conf['expanded']) ? $conf['expanded'] : FALSE;
+      $conf['level'] = isset($conf['level']) ? $conf['level'] : 1;
+      $conf['parent_mlid'] = $conf['level'] == 1 ? '' : $menu['menu_name'] . ':0';
+      $conf['depth'] = isset($conf['depth']) ? $conf['depth'] : 1;
+      $rendered_menu = menu_tree_build($conf);
+      $pane->content = $rendered_menu['content'];
+    }
+    else {
+      $pane->content = menu_tree($menu['menu_name']);
+    }
+    return $pane;
+  }
+  // If no menu was found return.
+  else {
+    return FALSE;
+  }
+}
+
+/**
+ * Get og referrer group id for printing the correct header.
+ *
+ * @param $referer
+ * @param $og_ref
+ *
+ * @return
+ *   referrer og group id
+ */
+function og_share_content_get_ref_group($referer, $og_ref) {
+  if ($ref = drupal_get_normal_path(urldecode($referer))) {
+    $share_gid = &drupal_static("group_show");
+    if (!isset($share_gid)) {
+      $url = parse_url($ref);
+      if (strpos($url['path'], 'node/') !== FALSE) {
+        $nid = substr($url['path'], strpos($url['path'], 'node/') + 5);
+      }
+      else {
+        $path_only = explode('/', $url['path']);
+        $node = drupal_get_normal_path($path_only[2], $path_only[1]);
+        $nid = substr($node, strpos($node, 'node/') + 5);
+      }
+      if (!empty($nid) && is_numeric($nid) && og_is_group('node', $nid)) {
+        foreach ($og_ref as $group) {
+          if ($group['target_id'] == $nid) {
+            // Set Group id of ref url as the current group.
+            $share_gid = $group['target_id'];
+            break;
+          }
+        }
+      }
+      elseif (!empty($nid) && is_numeric($nid)) {
+        // If its another page in specific group.
+        $gid = og_get_entity_groups('node', $nid);
+        $share_gid = reset($gid['node']);
+      }
+    }
+    else {
+      return $share_gid;
+    }
+  }
+  return (!empty($share_gid)) ? $share_gid : $og_ref[0]['target_id'];
+}
+
+/**
+ * Implements hook_ctools_plugin_directory().
+ *
+ * @param $owner
+ * @param $plugin_type
+ *
+ * @return
+ *   string plugin
+ */
+function og_share_content_ctools_plugin_directory($owner, $plugin_type) {
+  if ($owner == 'ctools' && $plugin_type == 'content_types') {
+    return 'plugins/' . $plugin_type;
+  }
+}
+
+/**
+ * Render the "Og share content" pane.
+ *
+ * @param $subtype
+ * @param $conf
+ * @param $panel_args
+ * @param $context
+ *
+ * @return
+ *   Og share content block pane
+ */
+function og_share_content_render_custom_pane($subtype, $conf, $panel_args, $context = NULL) {
+  $block = new stdClass();
+  $block->title = '';
+  $block->content = '';
+
+  // Display that this node is shared by another group.
+  // Get gid shown as header.
+  if ($share_gid = &drupal_static("group_show") && !empty($panel_args[0])) {
+    $nid = $panel_args[0];
+    if (empty($context)) {
+      return $block;
+    }
+    if (!is_numeric($nid)) {
+      $nid = $context[0]->argument;
+    }
+    if (is_numeric($nid)) {
+      $node = node_load($nid);
+      $og_ref = og_share_content_get_ref_by_node($node)['ref_name'];
+      $shared_groups = $context[0]->data->{$og_ref}[LANGUAGE_NONE];
+      if ($shared_groups[0]['target_id'] != $share_gid) {
+        foreach ($shared_groups as $group) {
+          if ($group['target_id'] == $share_gid) {
+            $block->content = '<div class="share-groups">';
+            $block->content .= t('This page is shared from') . og_share_content_get_node_title($shared_groups[0]['target_id']);
+            $block->content .= '</div>';
+            break;
+          }
+        }
+      }
+    }
+    else {
+      watchdog('shared by panel', 'expected getting node id as number. given object.', NULL, WATCHDOG_WARNING);
+    }
+  }
+  return $block;
+}
+
+/**
+ * Get node title.
+ *
+ * @param $nid
+ *
+ * @return
+ *   string node title
+ */
+function og_share_content_get_node_title($nid) {
+  $sql = 'SELECT title FROM {node} WHERE nid IN (:nids)';
+  return db_query($sql, array(':nids' => array($nid)))->fetchField();
+}
+
+/**
+ * Implements hook_form_alter().
+ *
+ * @param $form
+ * @param $form_state
+ * @param $form_id
+ */
+function og_share_content_form_alter(&$form, &$form_state, $form_id) {
+  if (module_exists('entityreference_prepopulate') && isset($form['type'])) {
+    $type = $form['type']['#value'];
+    $og_ref = og_share_content_get_ref_by_type($type);
+    if (isset($form[$og_ref])) {
+      $form[$og_ref]['#access'] = FALSE;
+    }
+  }
+}

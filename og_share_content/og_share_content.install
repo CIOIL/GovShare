@@ -1,0 +1,17 @@
+<?php
+
+/**
+ * @file
+ * Install file.
+ */
+
+/**
+ * Implements hook_install().
+ */
+function og_share_content_install() {
+  $t = get_t();
+
+  drupal_set_message(check_plain($t("Your Module settings are available under !link",
+    ['!link' => l($t('Administer > Site configuration > Share content'), 'admin/config/og_share_content')]
+  )));
+}

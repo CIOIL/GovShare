@@ -1,0 +1,467 @@
+<?php
+/**
+ * @file
+ * Gov IL OG Notifications Module.
+ */
+
+define('FREQUENCY_ONLINE',  0);
+define('FREQUENCY_DAILY',   1);
+define('FREQUENCY_WEEKLY',  2);
+define('FREQUENCY_MONTHLY', 3);
+define('UPDATE_ALL', 0);
+define('UPDATE_NEW', 1);
+define('UPDATE_OLD', 2);
+
+/**
+ * Implements hook_menu().
+ */
+function govil_og_notify_menu() {
+  $items = array();
+
+  // Main configuration page of the Gov IL Notifications module.
+   $items['admin/config/govil_og_notify'] = array(
+    'description' => 'Define all settings for Gov IL Notificaions.',
+    'title' => 'Notifications to Group settings',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('govil_og_notify_admin_settings'),
+    'access arguments' => array('administer govil og notifications settings'),
+    'type' => MENU_NORMAL_ITEM,
+    'file' => 'govil_og_notify.admin.inc',
+  );
+
+  // Configuration page per group for any user.
+  $items['group/%/%/admin/notifications'] = array(
+    'description' => 'Configuration for notificaions.',
+    'title' => 'Notifications to Group',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('govil_og_notify_form', 1, 2),
+    'access callback' => 'govil_og_notify_access',
+    'access arguments' => array(1, 2),
+    'weight' => 10,
+    'file' => 'govil_og_notify.pages.inc',
+  );
+
+  return $items;
+}
+
+/**
+ * Implements hook_permission().
+ */
+function govil_og_notify_permission() {
+  return array(
+    'administer govil og notifications settings' => array(
+      'title' => t('Administer Gov IL Notifications'),
+      'description' => t('Perform administration tasks for Gov IL Notifications.'),
+    ),
+    'manage govil og notifications' => array(
+      'title' => t('Manage Gov IL Notifications for a group'),
+      'description' => t('Manage Gov IL Notifications for all users in his group.'),
+    ),
+  );
+}
+
+/**
+ * Implements hook_og_ui_get_group_admin().
+ *
+ */
+function govil_og_notify_og_ui_get_group_admin($group_type, $gid) {
+  $items = array();
+
+  $groups = variable_get('govil_og_notify_groups', 'all');
+  if ($groups == 'all' || in_array($group_id, explode(",", $groups))) {
+    if (og_user_access($group_type, $gid, 'manage govil og notifications')) {
+      $items['govil_og_notify'] = array(
+        'title' => t('Manage Notifications'),
+        'description' => t('Manage notifications in group.'),
+        'href' => 'admin/notifications',
+      );
+    }
+  }
+
+  return $items;
+}
+
+/**
+ * Access function.
+ */
+function govil_og_notify_access($group_type, $gid) {
+  // Make sure that gid is id of an organic group.
+  if (!og_is_group($group_type, $gid)) {
+    return FALSE;
+  }
+  global $user;
+  if (!og_is_member($group_type, $gid, 'user', $user)) {
+    return FALSE;
+  }
+  return TRUE;
+}
+
+/**
+ * Implements hook_node_insert().
+ */
+function govil_og_notify_node_insert($node) {
+  _govil_og_notify_save_in_queue($node, 'new');
+}
+
+/**
+ * Implements hook_node_update().
+ */
+function govil_og_notify_node_update($node) {
+  _govil_og_notify_save_in_queue($node, 'old');
+}
+
+/**
+ * Save node in queue.
+ */
+function _govil_og_notify_save_in_queue($node, $updates) {
+  // Don't send unpublish content.
+  if ($node->status == 1 && module_exists('og')) {
+    // Get og field name.
+    $og_fields = og_get_group_audience_fields('node', $node->type);
+    // Use always with the first field.
+    if (count($og_fields) > 0) {
+      $og_fields = array_keys($og_fields);
+      $og_ref = array_pop($og_fields);
+      if (isset($node->{$og_ref}[LANGUAGE_NONE][0]['target_id'])) {
+        $group_id = $node->{$og_ref}[LANGUAGE_NONE][0]['target_id'];
+        // BETA: Save just for chosen groups.
+        // govil_og_notify_groups can be equal to "1,2,3"- numbers are groups ids.
+        $groups = variable_get('govil_og_notify_groups', 'all');
+        if ($groups == 'all' || in_array($group_id, explode(",", $groups))) {
+          $item = array(
+            'nid'   => $node->nid,
+            'type'  => $node->type,
+            'gid'   => $group_id,
+          );
+          $item['updates'] = $updates == "new" ? UPDATE_NEW : ($updates == "old" ? UPDATE_OLD : 0);
+          _govil_og_notify_create_item_in_queue($item);
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Save node in db.
+ */
+function _govil_og_notify_create_item_in_queue($data) {
+  db_merge('govil_og_notify_queue')
+    ->key(array(
+      'gid' => $data['gid'],
+      'nid' => $data['nid'],
+      'updates' => $data['updates'],
+      ))
+    ->fields(array(
+      'content_type' => $data['type'],
+    ))
+    ->execute();
+}
+
+/**
+ * Implements hook_cron().
+ *
+ * Check if its time to send notifications and if there is content to send it will be sent here.
+ */
+function govil_og_notify_cron() {
+  // Daily
+  $daily = variable_get('govil_og_notify_day', strtotime('today midnight'));
+  if (strtotime('today midnight') - $daily >= 86400) {
+    variable_set('govil_og_notify_day', strtotime('today midnight'));
+    _govil_og_notify_run_cron(FREQUENCY_DAILY);
+  }
+  // Weekly
+  $weekly = variable_get('govil_og_notify_week', strtotime('today midnight'));
+  if (strtotime('today midnight') - $weekly >= 604800) {
+    variable_set('govil_og_notify_week', strtotime('today midnight'));
+    _govil_og_notify_run_cron(FREQUENCY_WEEKLY);
+    // Clean old data.
+    _govil_og_notify_delete_queue();
+  }
+  // Monthly
+  $monthly = variable_get('govil_og_notify_month', strtotime('today midnight'));
+  if (strtotime('today midnight') - $monthly >= 2505600) {
+    variable_set('govil_og_notify_month', strtotime('today midnight'));
+    _govil_og_notify_run_cron(FREQUENCY_MONTHLY);
+  }
+  // Online
+  _govil_og_notify_run_cron(FREQUENCY_ONLINE);
+}
+
+/**
+ * Send notification by frequency.
+ */
+function _govil_og_notify_run_cron($frequency) {
+  if (variable_get('govil_og_notify_log', 0)) {
+    // Set this in configuration page if you want logs.
+    watchdog('govil_og_notify', 'Notification is sending. frequency id is ' . $frequency, array(), WATCHDOG_INFO);
+  }
+  $og_queue = _govil_og_notify_get_all_content($frequency);
+  $send_to = array();
+  // The default is to send notifications daily.
+  $default_send = $frequency == variable_get('govil_og_notify_default_send', FREQUENCY_DAILY) ? TRUE : FALSE;
+  foreach ($og_queue as $record) {
+    if (isset($last_uid) && $last_uid != $record->uid) {
+      // Send email now.
+      if (!empty($send_to)) {
+        govil_og_notify_message($send_to);
+      }
+      $send_to = array();
+    }
+    $last_uid = $record->uid;
+    if ($record->settings == 0 && $record->state == NULL) {
+      // User doesn't have any configuration.
+      if ($default_send) {
+        $send_to[] = $record;
+      }
+    }
+    elseif ($record->settings == 1 && $record->state == NULL) {
+      // Don't send.
+      continue;
+    }
+    elseif ($record->settings == 1 && $record->state == 1) {
+      // Send.
+      $send_to[] = $record;
+    }
+  }
+  // Send email of last person.
+  if (!empty($send_to)) {
+    govil_og_notify_message($send_to);
+  }
+
+  // Save that everything is sent.
+  _govil_og_notify_message_sent('all', $frequency);
+}
+
+/**
+ * Return a list of all content to send as notifications.
+ */
+function _govil_og_notify_get_all_content($frequency = FREQUENCY_DAILY) {
+  $frequency_col = _govil_og_notify_get_frequency_col($frequency);
+  if (!in_array($frequency_col, array('online', 'day', 'week', 'month'))) {
+    $frequency_col = 'day';
+  }
+
+  $more_conditionals = '';
+  // BETA: Get content just for chosen groups.
+  // govil_og_notify_groups can be equal to "1,2,3"- numbers are groups ids.
+  $chosen_groups = variable_get('govil_og_notify_groups', 'all');
+  if ($chosen_groups != 'all') {
+    $more_conditionals = 'AND nq.gid IN(' . $chosen_groups . ') ';
+  }
+
+  $query = db_query(
+    'SELECT
+      IF( (SELECT uid FROM govil_og_notify
+          WHERE ( gid = nq.gid AND uid = u.uid ) OR ( gid = nq.gid AND uid =0 ) LIMIT 1 )
+          IS NULL, 0, 1 ) AS settings,
+      gn.state AS state,
+      gn.content_type AS sett_content_type,
+      gn.updates AS sett_updates,
+      gn.frequency AS frequency,
+      nq.nid,
+      nq.gid,
+      nq.content_type,
+      nq.updates,
+      n.title AS title,
+      ogm.language,
+      u.uid AS uid,
+      u.name AS name,
+      u.mail AS mail
+    FROM govil_og_notify_queue nq
+    INNER JOIN node n ON nq.nid = n.nid AND n.status = 1
+    INNER JOIN og_membership ogm ON ogm.gid = nq.gid
+      AND ogm.entity_type =  \'user\'
+      AND ogm.state = 1
+    INNER JOIN users u ON u.uid = ogm.etid
+    LEFT JOIN govil_og_notify gn ON gn.gid = nq.gid
+      AND gn.frequency = :frequency
+      AND gn.updates IN (nq.updates, 0)
+      AND gn.content_type IN (CONCAT( \'%\', nq.content_type,  \'%\' ), 0)
+      AND gn.uid = IF( (SELECT uid FROM govil_og_notify WHERE uid = u.uid and gid = nq.gid LIMIT 1) IS NULL , 0, u.uid)
+    WHERE nq.' . $frequency_col . ' = 0 ' . $more_conditionals . '
+    ORDER BY uid, gid',
+    array(':frequency' => $frequency)
+  );
+
+  return $query;
+}
+
+/**
+ * Save flag about sent notification.
+ */
+function _govil_og_notify_message_sent($nid, $frequency) {
+  $frequency = _govil_og_notify_get_frequency_col($frequency);
+  if (!in_array($frequency, array('online', 'day', 'week', 'month'))) {
+    return;
+  }
+  $query = db_update('govil_og_notify_queue');
+  $query->fields(array( $frequency => 1, ));
+  if ($nid !== 'all') {
+    $query->condition('nid', $nid, '=');
+  }
+  return $query->execute();
+}
+
+/**
+ * Delete old data from queue table.
+ */
+function _govil_og_notify_delete_queue() {
+  db_delete('govil_og_notify_queue')
+    ->condition('online', 1)
+    ->condition('day',    1)
+    ->condition('week',   1)
+    ->condition('month',  1)
+    ->execute();
+}
+
+/**
+ * Prepare email message.
+ *
+ * @param array of $member contains email address and other data.
+ */
+function govil_og_notify_message($member) {
+  global $base_url;
+  $correct_url = variable_get('govil_og_notify_link_to', $base_url);
+  $name_of_site = variable_get('govil_og_notify_site_name', variable_get('site_name', ''));
+  $from_mail = variable_get('govil_og_notify_mail_from', variable_get('site_mail', ''));
+  $text_from = variable_get('govil_og_notify_text_from', 'from group');
+  $link_to_settings = variable_get('govil_og_notify_settings_link', TRUE);
+  $link_abs_options = array( 'absolute' => TRUE, 'base_url' => $correct_url );
+  $new_content = $updated_content = $groups = array();
+
+  $body = t('Summary of updates from') . ' ' . l(t($name_of_site), '', $link_abs_options) . ".\n\n";
+
+  // Generate a list of links.
+  foreach ($member as $node) {
+    $titles = govil_og_notify_node_get_title_fast(array($node->gid));
+    $group_title = array_shift($titles);
+    $link_grp = l($group_title, drupal_get_path_alias('node/' . $node->gid) , $link_abs_options);
+    $link_ttl = l($node->title, drupal_get_path_alias('node/' . $node->nid) , $link_abs_options);
+    $link = $link_ttl . " " . t($text_from) . " " . $link_grp;
+    if ($node->updates == UPDATE_NEW) {
+      $new_content[] = $link;
+    }
+    else {
+      $updated_content[] = $link;
+    }
+    $groups[] = $node->gid;
+  }
+  if (!empty($new_content)) {
+    $title = t('New pages') . ":";
+    $body .= '<br/>' . theme('item_list', array('items' => $new_content, 'title' => $title));
+  }
+  if (!empty($updated_content)) {
+    $title = t('Updated pages') . ":";
+    $body .= '<br/>' . theme('item_list', array('items' => $updated_content, 'title' => $title));
+  }
+
+  // Footer of message:
+  $groups = array_unique($groups);
+  if (count($groups) > 1) {
+    // 1. Link to settings page:
+    if ($link_to_settings == TRUE) {
+      $body .= '<br/>' . t('You can change your settings per group by going to') . ":";
+      $items = array();
+      govil_og_notify_node_get_title_fast($groups);
+      foreach ($groups as $g) {
+        $settings_page = drupal_get_path_alias('group/node/' . $g . '/admin/notifications');
+        $title = govil_og_notify_node_get_title_fast(array($g));
+        $group_title = t('Notifications Page of') . ' ' . array_shift($title);
+        $items[] = l($group_title, $settings_page, $link_abs_options);
+      }
+      $body .= theme('item_list', array('items' => $items));
+      $body .= '<br/>' . t('or you can unsubsribe from group by clicking on unsubscribe link on the group page');
+    }
+    // 2. Link to unsubscribe:
+    $body .= '<br/>' . t('You can unsubsribe from group by clicking on unsubscribe link on the group page');
+  }
+  else {
+    $g = array_shift($groups);
+    // 1. Link to settings page:
+    if ($link_to_settings == TRUE) {
+      $body .= '<br/>' . t('You can change your settings for this group by going to') . " ";
+      $page = drupal_get_path_alias('group/node/' . $g . '/admin/notifications');
+      $body .= l(t('Manage Notifications Page'), $page, $link_abs_options);
+    }
+    // 2. Link to unsubscribe:
+    $body .= '<br/>' . t('You can unsubscribe from the group by go to') . ' ';
+    $body .= l(t('unsubscribe link'), drupal_get_path_alias('group/node/' . $g . '/unsubscribe'), $link_abs_options);
+  }
+
+  // Send notifications.
+  $subject = t("Updates for you");
+  $sign = "<br/>" . t($name_of_site);
+  global $language;
+  $rtl = (isset($language->direction) && $language->direction == '1') ? 'style=\"text-align:right; direction:rtl;\"' : '' ;
+  $body = '<div ' . $rtl . '>' . $body . $sign . '</div>';
+  $mail = drupal_mail('govil_og_notify', 'group_update', $member[0]->mail, language_default(), array('subject' => $subject, 'body' => $body), $from_mail);
+  if (!$mail['result']) {
+    watchdog('govil_og_notify', 'Failed to send the email to ' . $member[0]->mail, array(), WATCHDOG_ALERT);
+  }
+}
+
+/**
+ * Implements hook_mail().
+ *
+ * @param string $key
+ * @param string $message
+ * @param array $params
+ */
+function govil_og_notify_mail($key, &$message, $params) {
+  $message['subject'] = isset($params['subject']) ? $params['subject'] : "subject";
+  $message['body'][] = isset($params['body']) ? $params['body'] : "body"   ;
+  $headers = array('Content-Type' => 'text/html; charset=UTF-8; format=flowed');
+  $message['headers'] = array_merge($message['headers'], $headers);
+  if (isset($params['headers']) && is_array($params['headers'])) {
+      $message['headers'] = array_merge($message['headers'], $params['headers']);
+  }
+}
+
+/**
+ * Return the correct column name for frequency.
+ */
+function _govil_og_notify_get_frequency_col($frequency) {
+  switch ($frequency) {
+    case FREQUENCY_ONLINE:
+      return 'online';
+    break;
+    case FREQUENCY_DAILY:
+      return 'day';
+    break;
+    case FREQUENCY_WEEKLY:
+      return 'week';
+    break;
+    case FREQUENCY_MONTHLY:
+      return 'month';
+    break;
+  }
+  return $frequency;
+}
+
+/**
+ * Return title of groups as fast as possible.
+ */
+function govil_og_notify_node_get_title_fast(array $nids) {
+  $titles = &drupal_static(__FUNCTION__, array());
+  $return = array();
+  $unavailable = array();
+  foreach ($nids as $nid) {
+    // Lookup static cache of self.
+    if (array_key_exists($nid, $titles)) {
+      $return[$nid] = $titles[$nid];
+    }
+    else { // Set NULL, so unavailable nodes will have NULL as their return value.
+      $unavailable[$nid] = NULL;
+    }
+  }
+
+  if ($unavailable) {
+    $results = db_query("SELECT nid, title FROM {node} WHERE nid IN (:nids)", array(':nids' => array_keys($unavailable)))->fetchAllKeyed(0, 1);
+    if ($results) {
+      $return = $results + $unavailable;
+      $titles = $return + $titles;
+    }
+  }
+
+  return $return;
+}

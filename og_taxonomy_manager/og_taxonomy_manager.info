@@ -1,0 +1,6 @@
+name = "Og taxonomy manager"
+description = "add taxonomy manager to og vocabularies"
+core = 7.x
+
+dependencies[] = og_vocab
+dependencies[] = taxonomy_manager

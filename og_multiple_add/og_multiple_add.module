@@ -1,0 +1,314 @@
+<?php
+
+/**
+* @file
+* OG Add user to Multiple Groups Module.
+*/
+
+/**
+ * Implements hook_menu().
+ *
+ * @return
+ *   Array menu items
+ */
+function og_multiple_add_menu() {
+  $items = array();
+
+  $items['admin/config/group/og_multiple_add'] = array(
+    'title' => t('Add user to multiple Groups'),
+    'description' => 'Add user to multiple Groups',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('og_multiple_add_form'),
+    'access arguments' => array('add user to multiple groups'),
+    'access callback' => 'og_multiple_add_access',
+  );
+
+  return $items;
+}
+
+/**
+ * Implements hook_permission().
+ */
+function og_multiple_add_permission() {
+  return array(
+    'add user to multiple groups' => array(
+      'title' => t('Add any user to multiple groups'),
+      'description' => t('Add any user to multiple groups.'),
+      'restrict access' => TRUE,
+    ),
+  );
+}
+
+/**
+ * Implements hook_form().
+ *
+ * @param $form
+ * @param $form_state
+ *
+ * @return
+ *   object $form
+ */
+function og_multiple_add_form($form, &$form_state) {
+
+  $user_name = '';
+  $form['user_name'] = array(
+    '#type' => 'textfield',
+    '#title' => t('User Name'),
+    '#size' => 30,
+    '#maxlength' => 60,
+    '#autocomplete_path' => 'user/autocomplete',
+    '#default_value' => $user_name,
+    '#weight' => -1,
+    '#required' => TRUE,
+  );
+
+  //Get all og content types.
+  $types = array();
+  $content_types = node_type_get_types();
+  foreach ($content_types as $type => $info) {
+    if (og_get_group_type('node', $type, 'group')) {
+      $types[] = $type;
+    }
+  }
+  $select = db_select('node', 'n')
+      ->fields('n', array('nid', 'title'))
+      ->condition('n.type', $types ,'IN');
+  $groups = $select->execute()->fetchAllKeyed();
+  $form['groups'] = array(
+    '#type' => 'select',
+    '#title' => t('Groups'),
+    '#options' => $groups,
+    '#multiple' => TRUE,
+    '#description' => t('Choose the groups to add the user into.'),
+    '#suffix' => '<div>'. t('Or (if you choose content type, the process will ignore the groups)') . '</div>', 
+  );
+
+  $form['types'] = array(
+    '#type' => 'select',
+    '#title' => t('All groups in content type'),
+    '#options' => array_merge(array(0 => t('none')), array_combine($types, $types)),
+    '#description' => t('Choose the content type to add the user into all groups of it.'),
+  );
+
+  // Set all roles that exist in site.
+  $roles = array();
+  foreach ($types as $key => $value) {
+    $roles_in_grp = og_roles('node', $value);
+    $roles = array_merge($roles, $roles_in_grp);
+  }
+  $roles = array_unique($roles);
+  // Delete non-member value.
+  if (($del_key = array_search(OG_ANONYMOUS_ROLE, $roles)) !== false) {
+    unset($roles[$del_key]);
+  }
+
+  $form['role'] = array(
+    '#type' => 'select',
+    '#title' => t('Role'),
+    '#options' => array_combine($roles, $roles),
+    '#description' => t('Choose the role for user in groups.'),
+  );
+
+  $form['submit'] = array(
+    '#type' => 'submit',
+    '#value' => t('Go'),
+  );
+
+  return $form;
+}
+
+/**
+ * Implements hook_form_validate().
+ * 
+ * The user must select types field or groups field.
+ * The user name field must be an available user name.
+ *
+ * @param $forms
+ * @param $form_state
+ * @return void
+ */
+function og_multiple_add_form_validate($form, &$form_state) {
+  $user = user_load_by_name($form_state['values']['user_name']);
+  if (!$user) {
+    $error = t('Unable to find user:') . $form_state['values']['user_name'];
+    form_set_error('user_name', $error);
+  }
+
+  if ($form_state['values']['types'] == '0' && empty($form_state['values']['groups'])) {
+    form_set_error('groups', t('please select at least 1 group or content type.'));
+  }
+}
+
+/**
+ * Submit function.
+ *
+ * Adding an user to multiple groups.
+ * Prepare the batch.
+ *
+ * @param $form
+ * @param $form_state
+ */
+function og_multiple_add_form_submit($form, &$form_state) {
+  $account = user_load_by_name($form_state['values']['user_name']);
+  $types = $form_state['values']['types'];
+  $groups = 0;
+
+  if ($types == '0' && !empty($form_state['values']['groups'])) {
+    $groups = $form_state['values']['groups'];
+  }
+  $og_role = $form_state['values']['role'];
+  $uid = $account->uid;
+  $function = '_og_multiple_add_process';
+  $batch = $function($uid, $groups, $types, $og_role);
+  batch_set($batch);
+} 
+
+/**
+ * Batch processor.
+ *
+ * @param $uid
+ * @param $gids
+ * @param $con_types
+ * @param $role
+ * @return void
+ */
+function _og_multiple_add_process($uid, $gids, $con_types, $role) {
+
+  $select = db_select('node', 'n')
+      ->fields('n', array('nid'));
+
+  if ($con_types != '0') {
+    $types = array($con_types);
+  }
+  else {
+    //Get all og content types.
+    $types = array();
+    $content_types = node_type_get_types();
+    foreach ($content_types as $type => $info) {
+      if (og_get_group_type('node', $type, 'group')) {
+        $types[] = $type;
+      }
+    }
+  }
+  $select->condition('n.type', $types ,'IN');
+
+  if ($gids != 0) {
+    $select->condition('n.nid', $gids ,'IN');
+  }
+
+  $nids = $select->execute()->fetchCol();
+
+  $num_operations = 10;
+  drupal_set_message(t('Creating an array of @num operations', array('@num' => $num_operations)));
+
+  $operations = array();
+  // Set up an operations array.
+  $nid_index = $op_index = 0;
+  While ($nid_index < count($nids)) {
+    $nid_op = array();
+    for ($i = 0; $i < $num_operations && $nid_index < count($nids); $i++) {
+      $nid_op[$i]  =$nids[$nid_index];
+      $nid_index++;
+    }
+
+    $operations[] = array(
+      'og_multiple_add_batch_run',
+      array(
+        array($nid_op, $uid, $role),
+        t('(Operation @operation)', array('@operation' => $op_index)),
+      ),
+    );
+    $op_index++;
+  }
+  $batch = array(
+    'operations' => $operations,
+    'finished' => 'og_multiple_add_finished',
+  );
+  return $batch;
+
+}
+
+/**
+ * Execute operations.
+ * Add the selected user to all groups.
+ *
+ * @param $params
+ * array contains array of groups ids, user id and role name.
+ * @param $operation_details
+ * @param $context
+ * @return void
+ */
+function og_multiple_add_batch_run($params, $operation_details, &$context) {
+  list($nids, $uid, $role) = $params;
+  // Add the user just if he doesn't belong to the group yet.
+  $select = db_select('og_membership', 'og')
+      ->fields('og', array('gid'))
+      ->condition('og.etid', $uid)
+      ->condition('og.gid', $nids, 'IN')
+      ->condition('og.entity_type', 'user')
+      ->condition('og.group_type', 'node');
+  $belong_to_groups = $select->execute()->fetchCol();
+
+  $created = 0; // Just for messaging.
+  foreach ($nids as $gid) {
+    if (empty($belong_to_groups) || !(in_array($gid, $belong_to_groups))) {
+        $created++;
+        // Add the user to the group
+        og_group('node', $gid, array(
+              "entity type"     => "user",
+              "entity"          => $uid,
+              "membership type" => OG_MEMBERSHIP_TYPE_DEFAULT,
+          ));
+    }
+
+    // The chosen role is not the default member role.
+    if ($role !== OG_AUTHENTICATED_ROLE) {
+      // Check if the role name is exist in that group.
+      $gid_roles = og_roles('node', null, $gid, false, false);
+      $role_id = array_search($role, $gid_roles);
+      // Changes the user's role in the group to be as chosen role.
+      if (isset($role_id)) {
+          og_role_grant('node', $gid, $uid, $role_id);
+      }
+    }
+  }
+  // Optional message displayed under the progressbar.
+  $context['message'] = t('Created @num memberships.', array('@num' => $created)) . ' ' . $operation_details;
+  if (isset($context['results']['created'])) {
+    $context['results']['created'] = $context['results']['created'] + $created;
+  }
+  else {
+    $context['results']['created'] = $created;
+  }
+  $context['results']['user'] = $uid;
+
+}
+
+/**
+ * Batch finish handler.
+ *
+ * @param $success
+ * @param $results
+ * @param $operations
+ * @return void
+ */
+function og_multiple_add_finished($success, $results, $operations) {
+  if ($success) {
+    $name = user_load($results['user'])->name;
+    drupal_set_message(t('The user %user was added to %final groups', array('%user' => $name , '%final' => $results['created'] )));
+  }
+  else {
+    // An error occurred.
+    // $operations contains the operations that remained unprocessed.
+    $error_operation = reset($operations);
+    drupal_set_message(
+      t('An error occurred while processing @operation with arguments : @args',
+        array(
+          '@operation' => $error_operation[0],
+          '@args' => print_r($error_operation[0], TRUE),
+        )
+      ),
+      'error'
+    );
+  }
+}

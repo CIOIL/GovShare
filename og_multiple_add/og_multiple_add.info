@@ -1,0 +1,5 @@
+name = OG Add User to Multiple
+description = Add form only for user-1 and ability to add a user to more than 1 group.
+core = 7.x
+
+dependencies[] = og

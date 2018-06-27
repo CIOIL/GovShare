@@ -1,0 +1,44 @@
+diff --git a/sites/all/modules/contrib/og_moderation/og_moderation.module b/sites/all/modules/contrib/og_moderation/og_moderation.module
+index 21a5592..115ef0c 100644
+--- a/sites/all/modules/contrib/og_moderation/og_moderation.module
++++ b/sites/all/modules/contrib/og_moderation/og_moderation.module
+@@ -59,26 +59,23 @@ function og_moderation_og_permission() {
+   return $perms;
+ }
+ 
++
+ function og_moderation_form_alter(&$form, &$form_state, $form_id) {
+   if (isset($form['#node_edit_form'])) {
+     if ($form['#node_edit_form'] && og_is_group_content_type('node', $form['#bundle'])) {
+-      if (isset($form['#node']->nid))
+-        $gids = og_get_entity_groups('node', $form['#node']);
+-      else
+-        $gids = og_get_groups_by_user();
+-      if ($gids) {
+-        foreach($gids['node'] as $id => $gid) {
+-          if (og_user_access('node', $gid, "access publishing options of " . $form['#bundle'] . " content")) {
+-            $form['options']['#access'] = TRUE;
+-          }
+-          if (og_user_access('node', $gid, "access revisions options of " . $form['#bundle'] . " content")) {
+-            $form['revision_information']['#access'] = TRUE;
+-          }
+-          if (og_user_access('node', $gid, "access authoring options of " . $form['#bundle'] . " content")) {
+-            $form['author']['#access'] = TRUE;
+-          }
+-        }
++      $context = og_context();
++      $gid = $context['gid']; 
++
++      if (og_user_access('node', $gid, "access publishing options of " . $form['#bundle'] . " content")) {
++        $form['options']['#access'] = TRUE;
++      }
++      if (og_user_access('node', $gid, "access revisions options of " . $form['#bundle'] . " content")) {
++        $form['revision_information']['#access'] = TRUE;
+       }
++      if (og_user_access('node', $gid, "access authoring options of " . $form['#bundle'] . " content")) {
++        $form['author']['#access'] = TRUE;
++      }
++
+     }
+   }
+ }

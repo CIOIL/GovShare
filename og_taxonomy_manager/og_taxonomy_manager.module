@@ -1,0 +1,381 @@
+<?php
+
+/**
+ * @file
+ * Code of og_taxonomy_manager.modul.
+ */
+
+define('OG_TAXONOMY_MANAGER_NEW_PATH_LENGTH', 2);
+
+/**
+ * Implements hook_menu_alter() for og_taxonomy_manager..
+ */
+function og_taxonomy_manager_menu_alter(&$callbacks) {
+  // Add menu items to taxonomy_manager specific by groups.
+  $items = array(
+    'taxonomy_manager/double-tree/%taxonomy_vocabulary_machine_name/%taxonomy_vocabulary_machine_name' =>
+         array(),
+    'taxonomy_manager/voc/%taxonomy_vocabulary_machine_name' => array(),
+    'taxonomy_manager/voc' => array(
+      'page callback' => 'og_taxonomy_manager_voc_list',
+    ),
+    'taxonomy_manager/childform' => array(),
+    'taxonomy_manager/siblingsform' => array(),
+  );
+
+  foreach ($items as $key => $item) {
+    $item_path = 'group/%/%/admin/' . $key;
+    $original_path = 'admin/structure/' . $key;
+
+    $callbacks[$item_path] = array_merge($callbacks[$original_path], $item);
+
+    $callbacks[$item_path]['access callback'] = 'og_vocab_vocabulary_access';
+    $access_arguments = array(1, 2, 'administer taxonomy');
+
+    if (!empty($callbacks[$original_path]['page arguments'])) {
+      $callbacks[$item_path]['page arguments'] = og_taxonomy_manager_update_args($callbacks[$original_path]['page arguments']);
+    }
+    if (!empty($callbacks[$original_path]['title arguments'])) {
+      $callbacks[$item_path]['title arguments'] =
+      og_taxonomy_manager_update_args($callbacks[$original_path]['title arguments']);
+    }
+    $callbacks[$item_path]['access arguments'] = $access_arguments;
+  }
+
+}
+
+/**
+ * Update arguments position on taxonomy manager new path.
+ */
+function og_taxonomy_manager_update_args($arguments) {
+  foreach ($arguments as $key => $arg) {
+    if (is_numeric($arg)) {
+      $arguments[$key] = $arg + OG_TAXONOMY_MANAGER_NEW_PATH_LENGTH;
+    }
+  }
+  return $arguments;
+}
+
+/**
+ * Implements hook_og_ui_get_group_admin() for og_taxonomy_manager.
+ */
+function og_taxonomy_manager_og_ui_get_group_admin($group_type, $gid) {
+  // Add taxonomy manager link on group home page.
+  $items = array();
+  if (og_user_access($group_type, $gid, 'administer taxonomy')) {
+    $items['taxonomy_manager'] = array(
+      'title' => t('Taxonomy manager'),
+      'description' => t('Advanced interface to Manage terms.'),
+    // The final URL will be "group/$entity_type/$etid/admin/taxonomy_manager/voc".
+      'href' => 'admin/taxonomy_manager/voc',
+    );
+  }
+  return $items;
+}
+
+/**
+ * List of vocabularies, which link to Taxonomy Manager interface.
+ */
+function og_taxonomy_manager_voc_list() {
+  if (!$context = og_vocab_is_group_admin_context()) {
+    return;
+  }
+
+  $group_type = $context['group_type'];
+  $gid = $context['gid'];
+
+  $path_prefix = "group/$group_type/$gid/admin";
+
+  $output = l(t('Add new vocabulary'), $path_prefix . '/taxonomy/add') . ' | ';
+  $output .= l(t('Edit vocabulary settings'), $path_prefix . '/taxonomy') . '<br /><br />';
+
+  $vocabularies = taxonomy_get_vocabularies();
+
+  if (!count($vocabularies)) {
+    $output .= t('No Vocabularies available');
+  }
+  else {
+    $voc = reset($vocabularies);
+    $form = drupal_get_form('taxonomy_manager_form', $voc);
+    $output .= drupal_render($form);
+  }
+  return $output;
+}
+
+/**
+ * Implements hook_form_FORM_ID_alter() for og_taxonomy_manager.
+ */
+function og_taxonomy_manager_form_alter(&$form, &$form_state, $form_id) {
+  // Alter form to update taxonomy manager url on some elements.
+  if (in_array($form['#form_id'], array('taxonomy_manager_form',
+    'taxonomy_manager_double_tree_form',
+  ))) {
+    $form = og_taxonomy_manager_form_alter_items($form, $form_state);
+  }
+  if ($form['#form_id'] == 'taxonomy_manager_double_tree_form') {
+    // Flip the operation arrows directions on case of hebrew.
+    global $language;
+    if ($language->language == 'he') {
+      og_taxonomy_manager_flip_arrows($form);
+    }
+  }
+}
+
+/**
+ * Flip arrows on case of rtl direction (hebrew).
+ */
+function og_taxonomy_manager_flip_arrows(&$form) {
+  $module_path = drupal_get_path('module', 'taxonomy_manager') . '/';
+  // If the buttons exists.
+  if (isset($form['double-tree']['operations']['move_right'])) {
+    $form['double-tree']['operations']['move_right']['#src'] = $module_path . "images/go-previous.png";
+    $form['double-tree']['operations']['move_left']['#src'] = $module_path . "images/go-next.png";
+    $form['double-tree']['operations']['move_right']['#attributes']['title'] = t('Switch selected terms and its children to the left voc');
+    $form['double-tree']['operations']['move_left']['#attributes']['title'] = t('Switch selected terms and its children to the right voc');
+    $form['double-tree']['operations']['copy_right']['#attributes']['title'] = t('Copy selected term names to the left voc.');
+    $form['double-tree']['operations']['copy_right']['#src'] = $module_path . "images/copy-left.png";
+    $form['double-tree']['operations']['copy_left']['#attributes']['title'] = t('Copy selected term names to the right voc.');
+    $form['double-tree']['operations']['copy_left']['#src'] = $module_path . "images/copy-right.png";
+  }
+}
+
+/**
+ * Update form elements on case of og taxonomy manager.
+ */
+function og_taxonomy_manager_form_alter_items($form, $form_state) {
+  if (!($details = og_taxonomy_manager_get_group_details($form))) {
+    return $form;
+  }
+  og_taxonomy_manager_replace_submit($form, $details);
+  // Alter delete form elements.
+  og_taxonomy_manager_alter_delete_form($form, $details);
+  // Alter jump menu options to current group vocabularies.
+  og_taxonomy_manager_alter_jump_item($form, $details);
+  // Double tree to og taxonomy manager.
+  og_taxonomy_manger_alter_double_tree($form, $form_state, $details);
+
+  return $form;
+}
+
+/**
+ * Replace submit function.
+ */
+function og_taxonomy_manager_replace_submit(&$form, $details) {
+  $form['#submit'] = array('og_taxonomy_manager_form_submit');
+}
+
+/**
+ * Submits the taxonomy manager form.
+ */
+function og_taxonomy_manager_form_submit($form, &$form_state) {
+  $details = og_taxonomy_manager_get_group_details();
+  if ($form_state['values']['delete'] === TRUE) {
+    return taxonomy_manager_term_confirm_delete_submit($form, $form_state);
+  }
+  $voc = $form_state['values']['voc'];
+  if (isset($form_state['values']['voc2'])) {
+    $voc2 = $form_state['values']['voc2'];
+    $url_prefix = $details['path_prefix'] . '/taxonomy_manager/double-tree/' . $voc->machine_name . '/' . $voc2->machine_name;
+  }
+  else {
+    $url_prefix = $details['path_prefix'] . '/taxonomy_manager/voc/' . $voc->machine_name;
+  }
+
+  $search_string = $form_state['values']['search']['field'];
+  $terms = array();
+
+  $include_synonyms = FALSE;
+  $selected_tids = array();
+  $language = "";
+
+  if ($form_state['values']['search']['options']['subtrees']) {
+    $selected_tids = $form_state['values']['taxonomy']['manager']['tree']['selected_terms'];
+  }
+  if (isset($form_state['values']['search']['options']['language'])) {
+    $language = $form_state['values']['taxonomy']['manager']['top']['language'];
+  }
+
+  $terms = taxonomy_manager_autocomplete_search_terms($search_string, $voc->vid, $include_synonyms, $selected_tids, $language);
+  if (count($terms) == 1) {
+    $tid = $terms[0];
+    drupal_set_message(t("Your search string matches exactly one term"));
+    drupal_goto($url_prefix . '/' . $tid);
+  }
+  elseif (count($terms) > 1) {
+    $matched_text_list = array();
+    foreach ($terms as $matched_tid) {
+      $matched_term = taxonomy_term_load($matched_tid);
+      $parents = array();
+      foreach (taxonomy_get_parents($matched_tid) as $parent) {
+        $parents[] = check_plain($parent->name);
+      }
+      $parent_text = count($parents) ? implode(' | ', $parents) . " › " : "";
+      $matched_text_list[] = $parent_text . l($matched_term->name, $url_prefix . '/' . $matched_term->tid, array('attributes' => array('title' => taxonomy_manager_tree_term_extra_info($matched_term)))) . " (" . $matched_term->tid . (!empty($matched_term->language) ? '-' . check_plain($matched_term->language) : '') . ")";
+    }
+    form_set_value($form, array('searched_terms' => $terms), $form_state);
+    drupal_set_message(t("Your search string matches !count terms:", array('!count' => count($terms))) . theme('item_list', array('items' => $matched_text_list)));
+    $form_state['rebuild'] = TRUE;
+  }
+  else {
+    drupal_set_message(t("No match found. Filtering root level terms starting with @search_string.", array('@search_string' => $search_string)));
+    drupal_set_message(l(t("Show unfiltered tree"), $url_prefix));
+    drupal_goto($url_prefix . '/0/' . $search_string);
+  }
+}
+
+/**
+ * Update path on delete form.
+ */
+function og_taxonomy_manager_alter_delete_form(&$form, $details) {
+  if (isset($form['delete']['#value']) && !empty($form['delete']['#value'])) {
+    $form['#submit'][] = 'og_taxonomy_manager_fix_redirect_path';
+    $form['actions']['cancel']['#href'] = $details['path_prefix'] .
+    str_replace('admin/structure', '', $form['actions']['cancel']['#href']);
+  }
+}
+
+/**
+ * Update path on jumb items.
+ */
+function og_taxonomy_manager_alter_jump_item(&$form, $details) {
+  global $language;
+  if (isset($form['jump'])) {
+    $options = array(reset($form['jump']['#options']));
+    $path_prefix = $details['path_prefix'];
+    foreach (og_taxonomy_manager_get_group_vocabs($details['context']['group_type'],
+    $details['context']['gid']) as $voc) {
+      $options[url($path_prefix . '/taxonomy_manager/voc/' . $voc->machine_name)] = $voc->name;
+    }
+    $form['jump']['#options'] = $options;
+    if (!isset($form['jump']['#default_value'])) {
+      $form['jump']['#default_value'] =
+      '/' . $language->language . '/' . $details['path_prefix'] . '/taxonomy_manager/voc/' . $form['voc']['#value']->machine_name; ;
+    }
+  }
+}
+
+/**
+ * Update path on double tree item.
+ */
+function og_taxonomy_manger_alter_double_tree(&$form, $form_state, $details) {
+  if (isset($form['double-tree-settings']['voc2_machine_name'])) {
+    // Prepare vocabularies list of the current group.
+    $vocabs = og_taxonomy_manager_get_group_vocabs($details['context']['group_type'],
+    $details['context']['gid']);
+    $options = array();
+    foreach ($vocabs as $voc) {
+      $options[$voc->machine_name] = $voc->name;
+    }
+    $form['double-tree-settings']['voc2_machine_name']['#options'] = $options;
+    if (isset($form['disable'])) {
+      $voc1 = $form_state['build_info']['args'][0];
+      $form['disable']['#markup'] = l(t('Disable Double Tree'), $details['path_prefix'] . '/taxonomy_manager/voc/' . $voc1->machine_name);
+    }
+    // Change submit function - to redirect to relative group path
+    // instead of global ('admin/structure') taxonomy manager path.
+    if (isset($form['double-tree-settings']['submit'])) {
+      $form['double-tree-settings']['submit']['#submit'] = array('og_taxonomy_manager_form_double_tree_submit');
+    }
+    else {
+      if (isset($form['double-tree-settings']['disable'])) {
+        $form['double-tree-settings']['disable']['#submit'] = array(
+          'og_taxonomy_manager_form_double_tree_disable_submit',
+        );
+      }
+    }
+  }
+}
+
+/**
+ * Update redirect on double tree submit.
+ */
+function og_taxonomy_manager_form_double_tree_submit($form, &$form_state) {
+  $details = og_taxonomy_manager_get_group_details();
+  drupal_goto($details['path_prefix'] . '/taxonomy_manager/double-tree/' . $form_state['values']['voc']->machine_name . '/' . $form_state['values']['double-tree-settings']['voc2_machine_name']);
+}
+
+/**
+ * Update redirect on disable double tree submit.
+ */
+function og_taxonomy_manager_form_double_tree_disable_submit($form, &$form_state) {
+  $details = og_taxonomy_manager_get_group_details();
+  drupal_goto($details['path_prefix'] . '/taxonomy_manager/voc/' . $form_state['values']['voc']->machine_name);
+}
+
+/**
+ * Ajax - check if current vocabulary belongs og group.
+ */
+function og_taxononmy_manager_ajax_is_group_admin_context($form = NULL) {
+  if ($form) {
+    $item = menu_get_item();
+    if ($item['path'] == 'system/ajax') {
+      if ($relation = og_vocab_relation_get($form['voc']['#value']->vid)) {
+        return array('group_type' => $relation->group_type, 'gid' => $relation->gid);
+      }
+    }
+  }
+  return FALSE;
+}
+
+/**
+ * Get context and correct path prefix for current group.
+ */
+function og_taxonomy_manager_get_group_details($form = NULL) {
+  if ((!($context = og_vocab_is_group_admin_context())
+  && !($context = og_taxononmy_manager_ajax_is_group_admin_context($form))) ||
+     !isset($context['group_type']) || !isset($context['gid'])) {
+    return FALSE;
+  }
+
+  $group_type = $context['group_type'];
+  $gid = $context['gid'];
+  return array(
+    'path_prefix' => "group/$group_type/$gid/admin",
+    'context' => $context,
+  );
+}
+
+/**
+ * Get all vocabularies of specific group.
+ */
+function og_taxonomy_manager_get_group_vocabs($group_type, $gid) {
+  $query = db_select('og_vocab_relation', 'ogr');
+  $query->join('taxonomy_vocabulary', 'tv', 'ogr.vid = tv.vid');
+  $query->fields('tv', array('machine_name', 'name'))
+    ->condition('group_type', $group_type)
+    ->condition('gid', $gid);
+
+  return $query->execute()->fetchAll();
+}
+
+/**
+ * Fix redirect path of given form.
+ */
+function og_taxonomy_manager_fix_redirect_path($form, &$form_state) {
+  $details = og_taxonomy_manager_get_group_details();
+  if (isset($details['path_prefix'])) {
+    $form_state['redirect'] = $details['path_prefix'] . str_replace('admin/structure', '', $form_state['redirect']);
+  }
+}
+
+/**
+ * Implements hook_element_info_alter() for og_taxonomy manger.
+ */
+function og_taxonomy_manager_element_info_alter(&$types) {
+  // Add process function to alter  js settings.
+  $types['taxonomy_manager_tree']['#process'][] = 'og_taxonomy_manager_alter_tree_process';
+}
+
+/**
+ * Alter js settings to og groups taxonomy manager.
+ */
+function og_taxonomy_manager_alter_tree_process($element) {
+  if (!($details = og_taxonomy_manager_get_group_details())) {
+    return;
+  }
+
+  drupal_add_js(array('siblingsForm' => array('url' => url($details['path_prefix'] . '/taxonomy_manager/siblingsform'))), 'setting');
+  drupal_add_js(array('childForm' => array('url' => url($details['path_prefix'] . '/taxonomy_manager/childform'))), 'setting');
+
+  return $element;
+}

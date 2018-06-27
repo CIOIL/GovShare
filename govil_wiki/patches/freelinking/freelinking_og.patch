@@ -1,0 +1,38 @@
+diff --git a/sites/all/modules/contrib/freelinking/plugins/freelinking_nodetitle.inc b/sites/all/modules/contrib/freelinking/plugins/freelinking_nodetitle.inc
+index 8771a7a..3ec8ae5 100644
+--- a/sites/all/modules/contrib/freelinking/plugins/freelinking_nodetitle.inc
++++ b/sites/all/modules/contrib/freelinking/plugins/freelinking_nodetitle.inc
+@@ -124,6 +124,8 @@ function _freelinking_nodetitle_prepare_link($target, $tip) {
+ 
+     // First time accessing this node. Process it.
+     $params['title'] = $target['dest'];
++    $target['dest'] = html_entity_decode($target['dest']);
++
+     $linktypes = variable_get('freelinking_nodetitle_linkcontenttype', array());
+ 
+     // EntityFieldQuery does not support OR. We solve this by looping
+@@ -144,6 +146,13 @@ function _freelinking_nodetitle_prepare_link($target, $tip) {
+       $query->entityCondition('entity_type', 'node')
+         ->propertyCondition('title', $target['dest'])
+         ->propertyCondition('status', 1); // published nodes
++      if (module_exists('og_context')) {
++        // filter node by og group
++        $context = og_context();
++        if (isset($context['group_type']) && isset($context['gid']) && !empty($context['gid'])) {
++          $query->fieldCondition('og_group_ref', 'target_id', $context['gid']);
++        }       
++      }
+       $result = $query->execute();
+       if (isset($result['node'])) {
+         foreach ($result['node'] as $item => $value) {
+@@ -152,8 +161,8 @@ function _freelinking_nodetitle_prepare_link($target, $tip) {
+             if (node_access('view', $nodex)) {
+               $found = TRUE;
+               break;
+-	    }
+-	  }
++            }
++          }
+         }
+       }
+     }

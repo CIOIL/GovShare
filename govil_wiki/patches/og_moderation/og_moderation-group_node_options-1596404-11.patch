@@ -1,0 +1,111 @@
+diff --git a/sites/all/modules/contrib/og_moderation/og_moderation.module b/sites/all/modules/contrib/og_moderation/og_moderation.module
+index 3c8cd3a..29d6493 100644
+--- a/sites/all/modules/contrib/og_moderation/og_moderation.module
++++ b/sites/all/modules/contrib/og_moderation/og_moderation.module
+@@ -62,7 +62,7 @@ function og_moderation_og_permission() {
+ 
+ function og_moderation_form_alter(&$form, &$form_state, $form_id) {
+   if (isset($form['#node_edit_form'])) {
+-    if ($form['#node_edit_form'] && og_is_group_content_type('node', $form['#bundle'])) {
++    if ($form['#node_edit_form'] && (og_is_group('node', $form['#node']) || og_is_group_content_type('node', $form['#bundle']))) {
+       if ($context = og_context()) {
+         $gid = $context['gid'];
+ 
+@@ -81,22 +81,38 @@ function og_moderation_form_alter(&$form, &$form_state, $form_id) {
+ }
+ 
+ /**
++ * Gets group ID for nodes which are acting as their own node as well as
++ * group IDs which come from group reference fields in group content
++ */
++function og_moderation_get_node_groups($node) {
++  $gids = array();
++
++  if (og_is_group('node', $node)) { //this node is acting as a group
++    $gids[] = $node->nid;
++  }
++  else if ($group_types = og_get_entity_groups('node', $node)) {
++    $gids = $group_types['node'];
++  }
++
++  return $gids;
++}
++
++/**
+  * Implements hook_node_access_records().
+  */
+ function og_moderation_node_access_records($node) {
+-  if ($node->status == 0 && $group_types = og_get_entity_groups('node', $node)) {
++  if ($node->status == 0) {
+     $grants = array();
+-    foreach (array_values($group_types) as $gids) {
+-      foreach ($gids as $gid) {
+-        $grants[] = array(
+-          'realm' => 'og_view_any_unpublished_' . $node->type . '_content',
+-          'gid' => $gid,
+-          'grant_view' => 1,
+-          'grant_update' => 0,
+-          'grant_delete' => 0,
+-          'priority' => 0,
+-        );
+-      }
++
++    foreach (og_moderation_get_node_groups($node) as $gid) {
++      $grants[] = array(
++        'realm' => 'og_view_any_unpublished_' . $node->type . '_content',
++        'gid' => $gid,
++        'grant_view' => 1,
++        'grant_update' => 0,
++        'grant_delete' => 0,
++        'priority' => 0,
++      );
+     }
+     return $grants;
+   }
+@@ -129,7 +145,7 @@ function og_moderation_node_grants($account, $op) {
+       }
+     }
+   }
+-  return isset($grants[$cache_id]) ? $grants[$cache_id] : array();;
++  return isset($grants[$cache_id]) ? $grants[$cache_id] : array();
+ }
+ 
+ /**
+@@ -156,11 +172,9 @@ function og_moderation_menu_alter(&$items) {
+ }
+ 
+ function og_moderation_node_revision_access($node, $op = 'view') {
+-  if ($gids = og_get_entity_groups('node', $node)) {
+-    foreach ($gids['node'] as $id => $gid) {
+-      if (og_user_access('node', $gid, "access revisions options of " . $node->type . " content")) {
+-        return TRUE;
+-      }
++  foreach (og_moderation_get_node_groups($node) as $gid) {
++    if (og_user_access('node', $gid, "access revisions options of " . $node->type . " content")) {
++      return TRUE;
+     }
+   }
+   // _node_revision_access() uses 'update' not 'revert'.
+@@ -177,9 +191,9 @@ function og_moderation_node_revision_access($node, $op = 'view') {
+  */
+ function og_moderation_revisioning_access_node_revision($revision_op, $node) {
+   $result = NODE_ACCESS_IGNORE;
+-  if (og_is_group_content_type('node', $node->type) && !empty($node->og_group_ref[LANGUAGE_NONE][0]['target_id'])) {
++
++  foreach (og_moderation_get_node_groups($node) as $gid) {
+     global $user;
+-    $gid = $node->og_group_ref[LANGUAGE_NONE][0]['target_id'];
+     switch ($revision_op) {
+       case 'publish revisions':
+         if (og_user_access('node', $gid, "publish revisions")) {
+@@ -267,9 +281,8 @@ function og_moderation_clone_access_alter(&$data, &$context1 = NULL, &$context2
+   $node = $context1;
+ 
+   if (clone_is_permitted($node->type)) {
+-    if (og_is_group_content_type('node', $node->type) && !empty($node->og_group_ref[LANGUAGE_NONE][0]['target_id'])) {
++    foreach (og_moderation_get_node_groups($node) as $gid) {
+       global $user;
+-      $gid = $node->og_group_ref[LANGUAGE_NONE][0]['target_id'];
+       if (og_user_access('node', $gid, "clone node")) {
+         $result = NODE_ACCESS_ALLOW;
+       }

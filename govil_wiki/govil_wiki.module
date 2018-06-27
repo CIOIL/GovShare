@@ -1,0 +1,391 @@
+<?php
+
+/**
+ * @file
+ * Govil_wiki.module.
+ */
+
+include_once 'config/govil_wiki.inc';
+
+// Load admin file of tableofcontents in node type form
+// to prevent errors.
+define('TABLEOFCONTENTS_REMOVE_PATTERN', '/(?:<p(?:\s[^>]*)?' . '>)?\[toc(?:\s[^]]*?)?\](?:<\/p\s*>)?/');
+define('TABLEOFCONTENTS_ALLOWED_TAGS', '<em> <i> <strong> <b> <u> <del> <ins> <sub> <sup> <cite> 
+<strike> <s> <tt> <span> <font> <abbr> <acronym> <dfn> <q> <bdo> <big> <small>');
+module_load_include('admin.inc', 'tableofcontents');
+
+/**
+ * Implements hook_og_permission() for govil_wiki.
+ */
+function govil_wiki_og_permission() {
+  $perms = array(
+    'view revision status messages' => array(
+      'title' => t('View revision status messages'),
+      'description' => t('view status messages from revisioning module.'),
+    ),
+    'revert revisions' => array(
+      'title' => t('Revert revisions'),
+      'description' => t('Define specific revision of node as current revision'),
+    ),
+  );
+  return $perms;
+}
+
+/**
+ * Implements hook_module_implements_alter() for govil_wiki.
+ */
+function govil_wiki_module_implements_alter(&$implementations, $hook) {
+  // Change order of modules, to call govil_wiki_node_presave after
+  // revisioning_node_presave.
+  if (in_array($hook, array('node_presave', 'og_user_access_alter'))) {
+    $govil_wiki = $implementations['govil_wiki'];
+    unset($implementations['govil_wiki']);
+    $implementations['govil_wiki'] = $govil_wiki;
+  }
+}
+
+/**
+ * Implements hook_node_insert() for govil_wiki.
+ */
+function govil_wiki_node_insert($node) {
+  // Grant 'administrator member' role to wiki author.
+  if ($node->type == 'wiki_page') {
+    $group_type = 'node';
+    $og_roles = og_roles($group_type, NULL, $node->nid);
+    $admin_rid = array_search(OG_ADMINISTRATOR_ROLE, $og_roles);
+    og_role_grant($group_type, $node->nid, $node->uid, $admin_rid);
+  }
+}
+
+/**
+ * Implements hook_node_presave() for govil_wiki.
+ */
+function govil_wiki_node_presave($node) {
+  $pending = isset($node->is_pending) ? $node->is_pending : FALSE;
+  $node->is_pending = TRUE;
+  if (!empty($node->revision_moderation) && govil_wiki_user_may_auto_publish($node)) {
+    govil_wiki_set_status_message(t('Auto-publishing this revision.'), $node);
+    // Follow the default saving process making this revision current and
+    // published, as opposed to pending.
+    unset($node->revision_moderation);
+    // This is not required for correct operation, as a revision becomes
+    // pending based on vid > current_revision_id. But it looks less confusing,
+    // when the "Published" box is in sync with the moderation radio buttons.
+    $node->status = NODE_PUBLISHED;
+    $node->auto_publish = TRUE;
+  }
+  if ($pending) {
+    $node->is_pending = $pending;
+  }
+}
+
+/**
+ * Check if user may auto publish his version.
+ */
+function govil_wiki_user_may_auto_publish($node) {
+  return variable_get('revisioning_auto_publish_' . $node->type, FALSE) && _revisioning_access_node_revision('publish revisions', $node);
+}
+
+/**
+ * Implements hook_revisioning_access_node_revision() for govil_wiki.
+ */
+function govil_wiki_revisioning_access_node_revision($revision_op, $node) {
+  global $user;
+  foreach (og_moderation_get_node_groups($node) as $gid) {
+    // If the node is new, and it's group, we check permissions on parent group.
+    if (!$gid) {
+      $gid = $node->og_group_ref[LANGUAGE_NONE][0]['target_id'];
+    }
+
+    switch ($revision_op) {
+      case 'revert revisions':
+        if (og_user_access('node', $gid, "revert revisions", NULL, FALSE, FALSE)) {
+          return NODE_ACCESS_ALLOW;
+        }
+        break;
+
+      case 'publish revisions':
+        if (og_user_access('node', $gid, 'publish revisions')) {
+          return NODE_ACCESS_ALLOW;
+        }
+        if (og_user_access('node', $gid, 'publish revisions of any ' . $node->type . ' content')) {
+          return NODE_ACCESS_ALLOW;
+        }
+        if (($node->uid == $user->uid) && og_user_access('node', $gid, 'publish revisions of own ' . $node->type . ' content')) {
+          return NODE_ACCESS_ALLOW;
+        }
+        break;
+
+      default:
+        break;
+    }
+  }
+}
+
+/**
+ * Filter all user groups  - return only groups that he is the admin member.
+ */
+function govil_wiki_filter_groups($groups, $group_type, $uid) {
+  foreach ($groups as $gid => $title) {
+    $og_roles = og_get_user_roles($group_type, $gid, $uid);
+    if (!is_array($og_roles) || !in_array("administrator member", $og_roles)) {
+      unset($groups[$gid]);
+    }
+  }
+  return $groups;
+}
+
+/**
+ * Set status message to users that may see it.
+ */
+function govil_wiki_set_status_message($message, $node) {
+  foreach (og_moderation_get_node_groups($node) as $gid) {
+    // Add relation to new node.
+    if (!$gid) {
+      $gid = $node->og_group_ref[LANGUAGE_NONE][0]['target_id'];
+    }
+    if (og_user_access('node', $gid, 'view revision status messages')) {
+      drupal_set_message(filter_xss($message), 'status');
+    }
+  }
+}
+
+/**
+ * Implements hook_menu() for govil_wiki.
+ */
+function govil_wiki_menu() {
+  $items['subgroup/%/user/autocomplete'] = array(
+    'title' => 'User autocomplete',
+    'page callback' => 'govil_wiki_subgroup_user_autocomplete',
+    'page arguments' => array(1),
+    'access callback' => 'user_access',
+    'access arguments' => array('access user profiles'),
+    'type' => MENU_CALLBACK,
+  );
+  return $items;
+}
+
+/**
+ * Implements hook_form_FORM_ID_alter() for govil_wiki.
+ */
+function govil_wiki_form_og_ui_add_users_alter(&$form, &$form_state, $form_id) {
+  // Check if group is 'wiki_page' type.
+  if ($form['#node']->type == 'wiki_page') {
+    // Check if group has parents.
+    $parents = og_subgroups_parents_load('node', $form['gid']['#value'], FALSE);
+    if (count($parents) > 0) {
+      // Change autocomplete path to get only inherited users.
+      // subgroup administrator can't add to his group people
+      // that doesn't members on parent group.
+      $form['og_user']['name']['#autocomplete_path'] = 'subgroup/' . $form['gid']['#value'] . '/user/autocomplete';
+      $form['#validate'][] = 'govil_wiki_form_og_ui_add_users_validate';
+      $form['parents'] = array('#type' => 'value', '#value' => $parents);
+    }
+  }
+}
+
+/**
+ * Check if selected user exists in the parent group.
+ */
+function govil_wiki_form_og_ui_add_users_validate($form, &$form_state) {
+  $parents = $form['parents']['#value'];
+  $account = user_load_by_name($form_state['values']['name']);
+  $groups = og_get_entity_groups('user', $account);
+  if (!count(array_intersect($groups['node'], $parents['node']))) {
+    form_set_error('name', t("You can't add user that doesn't belongs to parent group."));
+    return;
+  }
+}
+
+/**
+ * Get users list of patent group to autocomplete widget.
+ */
+function govil_wiki_subgroup_user_autocomplete($gid, $string = '') {
+  $group_type = 'node';
+  $matches = array();
+
+  if ($string) {
+    // Always load users only from parent group so filter set to FALSE.
+    $parents = og_subgroups_parents_load('node', $gid, FALSE);
+
+    $query = db_select('og_membership', 'ogm');
+    $query->join('users', 'u', 'u.uid = ogm.etid');
+    $query->fields('u', array('name'))
+      ->condition('entity_type', 'user')
+      ->condition('group_type', $group_type)
+      ->condition('gid', $parents[$group_type], 'IN')
+      ->condition('name', db_like($string) . '%', 'LIKE')
+      ->distinct()
+      ->range(0, 10);
+
+    $results = $query->execute()->fetchAll();
+    foreach ($results as $user) {
+      $matches[$user->name] = check_plain($user->name);
+    }
+  }
+  drupal_json_output($matches);
+}
+
+/**
+ * Implements hook_og_user_access_alter() for govil_wiki.
+ */
+function govil_wiki_og_user_access_alter(&$perms, $context) {
+  // Lock wiki nodes from all users when administrator choose to lock these.
+  if ($context['string'] == 'update any wiki_page content') {
+    $user_admin_groups = govil_wiki_get_user_admin_groups_from_current_node($context['group_type'],
+    $context['group']->nid, $context['account']->uid);
+    if (empty($user_admin_groups)) {
+      $locked = &drupal_static('wiki_locked');
+      if (!isset($locked)) {
+        $locked = field_get_items('node', $context['group'], 'field_locked');
+      }
+      if ($locked[0]['value']) {
+        // If user is not administrator member and the group node is locked, 
+        // set permission to FALSE.
+        $perms[$context['string']] = FALSE;
+      }
+    }
+  }
+}
+
+/**
+ * Get the groups that current user has admin role, from specific node and his parents.
+ */
+function govil_wiki_get_user_admin_groups_from_current_node($group_type, $gid, $uid) {
+  $groups = array();
+  $parents = og_subgroups_parents_load($group_type, $gid);
+  // Add the current group id to array.
+  if (!empty($parents[$group_type])) {
+    $groups = array_flip($parents[$group_type]);
+  }
+  $groups[$gid] = $gid;
+  // Get only the groups that the user has administrator role.
+  return govil_wiki_filter_groups($groups, $group_type, $uid);
+}
+
+/**
+ * Implements hook_form_FORMID_alter() for govil_wiki.
+ */
+function govil_wiki_form_node_form_alter(&$form, &$form_state) {
+  // Hide lock field to simple members.
+  global $user;
+  if ($form['#node']->type == 'wiki_page' && isset($form['#node']->nid)) {
+    $user_admin_groups = govil_wiki_get_user_admin_groups_from_current_node('node', $form['#node']->nid,
+    $user->uid);
+    if (empty($user_admin_groups) && $user->uid !== "1") {
+      $form['field_locked']['#access'] = FALSE;
+    }
+  }
+}
+
+/**
+ * Implements hook_filter_info_alter() for govil_wiki.
+ */
+function govil_wiki_filter_info_alter(&$info) {
+  if (isset($info['edit_section_filter'])) {
+    $info['edit_section_filter']['process callback'] = 'govil_wiki_edit_section_filter_process';
+  }
+}
+
+/**
+ * Remove edit section from page type.
+ */
+function govil_wiki_edit_section_filter_process($text) {
+  if (arg(0) == 'node' && is_numeric(arg(1))) {
+    $node = node_load(arg(1));
+    if ($node->type == 'wiki_page' && node_access('update', $node)) {
+      _edit_section_add_links($text);
+    }
+  }
+  return $text;
+}
+
+/**
+ * Implements hook_og_context_negotiation_info() for govil_wiki.
+ */
+function govil_wiki_og_context_negotiation_info() {
+  $providers = array();
+
+  $providers['group_parent'] = array(
+    'name' => t('Group parent'),
+    'description' => t("Return id of parent group, if exists"),
+    'callback' => 'govil_wiki_handler_group_parent',
+  );
+
+  return $providers;
+}
+
+/**
+ * Context handler; Get groups from parent of comment being added to it.
+ */
+function govil_wiki_handler_group_parent() {
+  $check_parent = &drupal_static(__FUNCTION__);
+  if (!isset($check_parent)) {
+    $check_parent = TRUE;
+    govil_wiki_clear_og_context_cache();
+    $context = og_context();
+    if (isset($context['group_type']) && isset($context['gid'])) {
+      list($group_type, $gid) = array_values($context);
+      $parents = og_subgroups_parents_load($group_type, $gid);
+      if (!empty($parents[$group_type])) {
+        // Get the first parent.
+        $context['gid'] = reset($parents[$group_type]);
+      }
+      return array($context['group_type'] => array($context['gid']));
+    }
+  }
+  return FALSE;
+}
+
+/**
+ * Clear og context cache.
+ */
+function govil_wiki_clear_og_context_cache() {
+  global $user;
+  $id = FALSE;
+  $group_type = 'node';
+  $cache_keys = array(
+    $group_type,
+    $id,
+    $user->uid,
+    TRUE,
+  );
+  $cache_key = implode(':', $cache_keys);
+  $context = &drupal_static('og_context', array());
+  if (isset($context[$cache_key])) {
+    unset($context[$cache_key]);
+  }
+}
+
+/**
+ * Add title on wiki group members admin page.
+ */
+function govil_wiki_preprocess_views_view(&$vars) {
+  $view = $vars['view'];
+  if ($view->name . ':' . $view->current_display == variable_get('og_ui_admin_people_view')) {
+    if (arg(1) == 'node' && is_numeric(arg(2))) {
+      $node = node_load(arg(2));
+      if ($node->type == 'wiki_page') {
+        $vars['header'] = '<h3>' . t('wiki page') . '</h3>' . $vars['header'];
+      }
+    }
+  }
+}
+
+/**
+ * Remove unnecessary links from group admin page.
+ */
+function govil_wiki_og_ui_get_group_admin_alter(&$data, $context) {
+  if (arg(0) == 'node' && is_numeric(arg(1))) {
+    $node = node_load(arg(1));
+    if ($node->type == 'wiki_page') {
+      $wiki = TRUE;
+    }
+  }
+
+  foreach ($data as $key => &$item) {
+    if ($wiki == TRUE && $key != "people") {
+      unset($data[$key]);
+    }
+  }
+}

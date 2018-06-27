@@ -1,0 +1,72 @@
+diff --git a/sites/all/modules/contrib/og_moderation/og_moderation.module b/sites/all/modules/contrib/og_moderation/og_moderation.module
+index 3c8cd3a..56bb1c8 100644
+--- a/sites/all/modules/contrib/og_moderation/og_moderation.module
++++ b/sites/all/modules/contrib/og_moderation/og_moderation.module
+@@ -81,55 +81,25 @@ function og_moderation_form_alter(&$form, &$form_state, $form_id) {
+ }
+ 
+ /**
+- * Implements hook_node_access_records().
++ * Implements hook_node_access().
+  */
+-function og_moderation_node_access_records($node) {
+-  if ($node->status == 0 && $group_types = og_get_entity_groups('node', $node)) {
+-    $grants = array();
+-    foreach (array_values($group_types) as $gids) {
+-      foreach ($gids as $gid) {
+-        $grants[] = array(
+-          'realm' => 'og_view_any_unpublished_' . $node->type . '_content',
+-          'gid' => $gid,
+-          'grant_view' => 1,
+-          'grant_update' => 0,
+-          'grant_delete' => 0,
+-          'priority' => 0,
+-        );
+-      }
+-    }
+-    return $grants;
++function og_moderation_node_access($node, $op, $account) {
++  if ($op != 'view' || !is_object($node)) {
++    return NODE_ACCESS_IGNORE;
+   }
+-}
+-
+-/**
+- * Implements hook_node_grants().
+- */
+-function og_moderation_node_grants($account, $op) {
+-  if ($op != 'view') {
+-    return;
+-  }
+-  $grants = &drupal_static(__FUNCTION__);
+-  if (!isset($grants)) {
+-    $grants = array();
+-  }
+-  $cache_id = $account->uid . $op;
+-  if (!isset($grants[$cache_id])) {
+-    if ($groups = og_get_entity_groups('user', $account)) {
+-      $node_types = node_type_get_types();
+-      foreach ($groups as $group_type => $gids) {
+-        foreach ($gids as $gid) {
+-          foreach ($node_types as $node_type) {
+-            if (og_user_access('node', $gid, "view any unpublished " . $node_type->type . " content")) {
+-              $realm = 'og_view_any_unpublished_' . $node_type->type . '_content';
+-              $grants[$cache_id][$realm][] = $gid;
+-            }
++  if ($op == 'view' && !$node->status) {
++    foreach (og_get_entity_groups('node', $node) as $entity_type => $og_memberships) {
++      foreach ($og_memberships as $membership_id => $entity_id) {
++        if ($entity_type == 'node') {
++          if (og_user_access('node', $entity_id, 'view any unpublished ' . $node->type . ' content', $account)) {
++            return NODE_ACCESS_ALLOW;
+           }
+         }
+       }
+     }
+   }
+-  return isset($grants[$cache_id]) ? $grants[$cache_id] : array();;
++
++  return NODE_ACCESS_IGNORE;
+ }
+ 
+ /**

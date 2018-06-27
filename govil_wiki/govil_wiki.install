@@ -1,0 +1,90 @@
+<?php
+
+/**
+ * @file
+ * Installation code for govil_wiki module.
+ */
+
+include_once 'config/govil_wiki.field_base.inc';
+include_once 'config/govil_wiki.field_instance.inc';
+include_once 'config/govil_wiki.og_permission.inc';
+include_once 'config/govil_wiki.variables.inc';
+
+define('GOVIL_WIKI_BATCH_SIZE', 10);
+
+/**
+ * Implements hook_install().
+ */
+function govil_wiki_install() {
+  // Prevent group manager to get full access.
+  variable_set('og_group_manager_full_access', FALSE);
+  // Add group parent context to enabled contexts.
+  $defaults = array('url' => -5, 'node' => -4, 'file-ajax' => -3);
+  $enabled_contexts = variable_get('og_context_negotiation_group_context', $defaults);
+  $enabled_contexts = array_merge(array('group_parent' => array()), $enabled_contexts);
+  variable_set('og_context_negotiation_group_context', $enabled_contexts);
+
+  $weights = variable_get('og_context_providers_weight_group_context');
+  // Put group parent context first.
+  $weights['group_parent'] = -100;
+  variable_set('og_context_providers_weight_group_context', $weights);
+  // Create wiki page node type from hook_node_info.
+  node_types_rebuild();
+  // Update variables.
+  govil_wiki_update_variables('variable_set');
+  // Create field bases.
+  govil_wiki_create_field_bases();
+  // Create field instances.
+  govil_wiki_create_field_instances();
+  // Add trusted member role to wiki page.
+  $role = og_role_create('trusted member', 'node', 0, 'wiki_page');
+  og_role_save($role);
+  // Set permissions.
+  govil_wiki_set_og_permissions();
+  // Enable footnotes button.
+  govil_wiki_enable_wysiwyg_footnote();
+  // Enable some filters in full html text format.
+  govil_wiki_enable_text_filters();
+  // Enable freelinking to all content types.
+  govil_wiki_define_freelinking();
+}
+
+/**
+ * Implements hook_uninstall().
+ */
+function govil_wiki_uninstall() {
+  // Remove group parent context.
+  $enabled_contexts = variable_get('og_context_negotiation_group_context');
+  unset($enabled_contexts['group_parent']);
+  variable_set('og_context_negotiation_group_context', $enabled_contexts);
+
+  // Delete variables.
+  govil_wiki_update_variables('variable_del');
+
+  // Delete wiki pages.
+  $results = db_select('node', 'n')
+    ->fields('n', array('nid'))
+    ->condition('type', 'wiki_page')
+    ->execute();
+  foreach ($results as $result) {
+    $nids[] = $result->nid;
+  }
+  if (!empty($nids)) {
+    node_delete_multiple($nids);
+  }
+
+  // Delete all field instances on wiki page.
+  $instances = field_info_instances('node', 'wiki_page');
+  foreach ($instances as $instance) {
+    field_delete_instance($instance);
+  }
+  // Delete base field locked.
+  if ($field = field_info_field('field_locked')) {
+    field_delete_field($field);
+    field_purge_batch(GOVIL_WIKI_BATCH_SIZE);
+  }
+
+  // Delete wiki page node type.
+  node_type_delete('wiki_page');
+
+}

@@ -93,6 +93,11 @@ function event_invitation_admin_settings($form, &$form_state) {
 
 /**
  * Ajax callback to update fields selects by selected content type.
+ *
+ * @param [type] $form
+ * @param [type] $form_state
+ *
+ * @return object form element.
  */
 function event_invitation_load_type_fields($form, &$form_state) {
   return $form['fields'];
@@ -100,6 +105,11 @@ function event_invitation_load_type_fields($form, &$form_state) {
 
 /**
  * Helper function to map types array.
+ *
+ * @param [type] $result
+ * @param [type] $item
+ *
+ * @return array
  */
 function event_invitation_map_types(&$result, $item) {
   $result[$item->type] = $item->name;
@@ -108,6 +118,11 @@ function event_invitation_map_types(&$result, $item) {
 
 /**
  * Validation of event invitation settings form.
+ *
+ * @param object $form
+ * @param object $form_state
+ * 
+ * @return void
  */
 function event_invitation_admin_settings_validate($form, &$form_state) {
   // Check if selected content type has field of type date.
@@ -151,6 +166,11 @@ function event_invitation_admin_settings_validate($form, &$form_state) {
 
 /**
  * Submit function to add instance of field send invitation to selected type.
+ *
+ * @param object $form
+ * @param object $form_state
+ *
+ * @return void
  */
 function event_invitation_admin_settings_submit($form, &$form_state) {
   $prev_type = variable_get('event_invitation_content_type', '');
@@ -168,6 +188,10 @@ function event_invitation_admin_settings_submit($form, &$form_state) {
 
 /**
  * Create instance of field send invitation on given type.
+ *
+ * @param string $bundle
+ *
+ * @return void
  */
 function event_invitation_create_field_instance($bundle) {
   $instance = array(
@@ -225,6 +249,10 @@ function event_invitation_create_field_instance($bundle) {
 
 /**
  * Remove instance of field_send_invitation from the prev invitation bundle.
+ *
+ * @param string $bundle
+ *
+ * @return void
  */
 function event_invitation_remove_prev_instance($bundle) {
   if ($instance = field_info_instance('node', 'field_send_invitation', $bundle)) {
@@ -238,12 +266,9 @@ function event_invitation_remove_prev_instance($bundle) {
 /**
  * Get all fields of given content type.
  *
- * @param string $type
- *   Content type name to get all its fields.
+ * @param string type content type name to get all its fields.
  *
- * @return array
- *   Associative array keyed with the field name and the field label as
- *   the value.
+ * @return Array keyed with the field name and the field label as the value.
  */
 function event_invitation_get_fields_to_type($type) {
   $fields = field_info_instances('node', $type);
@@ -253,6 +278,11 @@ function event_invitation_get_fields_to_type($type) {
 
 /**
  * Helper function to map fields array.
+ *
+ * @param $result
+ * @param $item
+ *
+ * @return array
  */
 function event_invitation_map_fields(&$result, $item) {
   $result[$item['field_name']] = $item['label'];

@@ -14,8 +14,8 @@ function event_invitation_menu() {
   $items = array();
   // Main configuration page of the event invitation module.
   $items['admin/config/event_invitation'] = array(
-    'title' => 'Event invitation settings',
-    'description' => 'Define content type and fields to send event invitations',
+    'title' => t('Event invitation settings'),
+    'description' => t('Define content type and fields to send event invitations'),
     'file' => 'event_invitation.admin.inc',
     'page callback' => 'drupal_get_form',
     'page arguments' => array('event_invitation_admin_settings'),
@@ -40,7 +40,7 @@ function event_invitation_permission() {
 
 /**
  * Implements hook_node_insert() for event_invitation.
- *
+ * 
  * Send invitation when new event saved.
  */
 function event_invitation_node_insert($node) {
@@ -57,8 +57,7 @@ function event_invitation_node_insert($node) {
 
 /**
  * Implements hook_node_update() for event_invitation.
- *
- * Send invitation when event published or date event has been changed.
+ * send invitation when event published or date event has been changed.
  */
 function event_invitation_node_update($node) {
   $event_type = variable_get('event_invitation_content_type', '');
@@ -88,14 +87,14 @@ function event_invitation_node_delete($node) {
   $event_type = variable_get('invitation_content_type', '');
   if ($event_type) {
     if ($node->type == $event_type) {
-      if (isset($node->field_send_invitation[LANGUAGE_NONE][0]['value']) &&
-        $node->field_send_invitation[LANGUAGE_NONE][0]['value']) {
-        // Save original node title.
-        $title = $node->title;
-        $node->title = t('Canceled:') . ' ' . $node->title;
-        event_invitation_send_event_invitation($node,
-        ['status' => 'CANCELLED', 'method' => 'CANCEL']);
-        $node->title = $title;
+      if (isset($node->field_send_invitation[LANGUAGE_NONE][0]['value']) && 
+      $node->field_send_invitation[LANGUAGE_NONE][0]['value']) {
+      // Save original node title.
+      $title = $node->title;
+      $node->title = t('Canceled: ') . $node->title;
+      event_invitation_send_event_invitation($node, 
+      ['status' => 'CANCELLED', 'method' => 'CANCEL']);
+      $node->title = $title;
       }
     }
   }
@@ -104,8 +103,9 @@ function event_invitation_node_delete($node) {
 /**
  * Get 'from' string to mail header.
  *
- * @return string
- *   group name of event or site name if not group content
+ * @param $event
+ *
+ * @return string group name of event or site name if not group content
  */
 function event_invitation_get_from_name($event, $gid = '') {
   if ($gid) {
@@ -121,6 +121,10 @@ function event_invitation_get_from_name($event, $gid = '') {
 
 /**
  * Send event invitation by the event fields.
+ *
+ * @param $event
+ *
+ * @return void
  */
 function event_invitation_send_event_invitation($event, $params = []) {
   global $base_url;
@@ -128,11 +132,10 @@ function event_invitation_send_event_invitation($event, $params = []) {
     'description' => '',
     'location' => '',
     'endTime' => '',
-    'status' => 'NEEDS-ACTION',
-    'method' => 'REQUEST',
-  ], $params);
-  // Get the names of required event fields
-  // as defined on settings page.
+    'status' => 'NEEDS-ACTION', 
+    'method' => 'REQUEST'], $params);
+    // get the names of required event fields
+    // as defined on settings page.
   $field_date = variable_get('event_invitation_date_field', '');
 
   // Check if event is og group.
@@ -164,7 +167,7 @@ function event_invitation_send_event_invitation($event, $params = []) {
 }
 
 /**
- * Check if event is og group content.
+ *
  */
 function event_invitation_event_is_og_group_content($event) {
   if (module_exists('og')) {
@@ -185,8 +188,10 @@ function event_invitation_event_is_og_group_content($event) {
 /**
  * Get mails of group or site users.
  *
- * @param string $organizer_mail
+ * @param $organizer_mail
  *   Event organizer mail.
+ *
+ * @return void
  */
 function event_invitation_get_mails_to($organizer_mail, $gid = '') {
   if ($gid) {
@@ -202,11 +207,9 @@ function event_invitation_get_mails_to($organizer_mail, $gid = '') {
  * Sql query to get all mails of site users.
  *
  * @param string $organizer_mail
- *   The mail of organizer, to remove him from the mails list.
- *   (don't send invitation to him)
+ *   The mail of organizer, to remove him from the mails list. (don't send invitation to him)
  *
- * @return string
- *   All users mails.
+ * @return string of all users mails.
  */
 function event_invitation_site_users_mail_query($organizer_mail = '') {
   $query = db_select('users', 'u');
@@ -223,14 +226,12 @@ function event_invitation_site_users_mail_query($organizer_mail = '') {
 /**
  * Sql query to get all mails of specific group's users.
  *
- * @param int $gid
+ * @param $gid
  *   Required group id.
- * @param string $organizer_mail
- *   The mail of organizer, to remove him from the mails list.
- *   (don't send invitation to him)
+ * @param $organizer_mail
+ *   The mail of organizer, to remove him from the mails list. (don't send invitation to him)
  *
- * @return string
- *   Group's users mails.
+ * @return string of group's users mails.
  */
 function event_invitation_members_mail_query($gid, $organizer_mail = '') {
   $query = db_select('users', 'u');
@@ -259,8 +260,10 @@ function event_invitation_mail($key, &$message, $params) {
 /**
  * Set headers to send invitation.
  *
- * @return array
- *   Mail headers array.
+ * @param [string] $from_name
+ * @param [string] $from_address
+ *
+ * @return array of headers
  */
 function event_invitation_get_invitation_headers($from_name, $from_address) {
   $mime_boundary = "----Meeting Booking----" . md5(time());
@@ -274,15 +277,18 @@ function event_invitation_get_invitation_headers($from_name, $from_address) {
   $headers['Return-Path'] = $from_address;
 
   return $headers;
-}
+}    
 
 define('EVENT_INVITATION_FROM_NAME_LENGTH', 35);
 
 /**
  * Prepare invitation body.
  *
- * @return string
- *   ical text.
+ * @param $params
+ *   array of data params of event invitation.
+ *
+ * @return string 
+ *  ical text.
  */
 function event_invitation_get_invitation_body($params) {
   $domain = variable_get('event_invitation_domain', '');
@@ -307,10 +313,10 @@ function event_invitation_get_invitation_body($params) {
     $params['from_name'] = substr($wrap, 0, strpos($wrap, "\n")) . '...';
   }
 
-  $ical = 'BEGIN:VCALENDAR' . "\r\n" .
-    'PRODID:-//Microsoft Corporation//Outlook 10.0 MIMEDIR//EN' . "\r\n" .
+    $ical = 'BEGIN:VCALENDAR' . "\r\n" .
+    'PRODID:-//Microsoft Corporation//Outlook 10.0 MIMEDIR//EN' . "\r\n" . 
     'VERSION:2.0' . "\r\n" .
-   'METHOD:' . $params['method'] . "\r\n" .
+   'METHOD:' . $params['method'] .  "\r\n" .
     'BEGIN:VTIMEZONE' . "\r\n" .
     'TZID:Israel Time' . "\r\n" .
     'BEGIN:STANDARD' . "\r\n" .

@@ -28,8 +28,7 @@ class EventInvitationMailSystem implements MailSystemInterface {
   }
 
   /**
-   *
-   * @inheritdoc
+   * Send mail.
    */
   public function mail(array $message) {
     // If 'Return-Path' isn't already set in php.ini, we pass it separately

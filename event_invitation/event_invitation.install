@@ -30,27 +30,27 @@ function event_invitation_install() {
   $t = get_t();
   // Create base field send invitation.
   $field = array(
-  'active' => 1,
-  'cardinality' => 1,
-  'deleted' => 0,
-  'entity_types' => array(),
-  'field_name' => 'field_send_invitation',
-  'indexes' => array(
-    'value' => array(
-      0 => 'value',
+    'active' => 1,
+    'cardinality' => 1,
+    'deleted' => 0,
+    'entity_types' => array(),
+    'field_name' => 'field_send_invitation',
+    'indexes' => array(
+      'value' => array(
+        0 => 'value',
+      ),
     ),
-  ),
-  'locked' => 0,
-  'module' => 'list',
-  'settings' => array(
-    'allowed_values' => array(
-      0 => '',
-      1 => $t('Send invitation on this event'),
+    'locked' => 0,
+    'module' => 'list',
+    'settings' => array(
+      'allowed_values' => array(
+        0 => '',
+        1 => $t('Send invitation on this event'),
+      ),
+      'allowed_values_function' => '',
     ),
-    'allowed_values_function' => '',
-  ),
-  'translatable' => 0,
-  'type' => 'list_boolean',
+    'translatable' => 0,
+    'type' => 'list_boolean',
   );
   field_create_field($field);
 }
